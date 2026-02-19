@@ -3,7 +3,7 @@ import path from "path";
 
 const VIP_FILE = path.join(process.cwd(), "settings", "vip.json");
 
-// ---------- Utils ----------
+// ================== HELPERS ==================
 function ensureVipFile() {
   const dir = path.dirname(VIP_FILE);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -27,9 +27,9 @@ function saveVip(data) {
   fs.writeFileSync(VIP_FILE, JSON.stringify(data, null, 2));
 }
 
-function normalizeNumber(x) {
+function normalizarNumero(x) {
   // "51907376960@s.whatsapp.net" -> "51907376960"
-  // "51907376960:18@s.whatsapp.net" -> "51907376960"
+  // "51907376960:16@s.whatsapp.net" -> "51907376960"
   // "+51907376960" -> "51907376960"
   return String(x || "")
     .split("@")[0]
@@ -40,7 +40,7 @@ function normalizeNumber(x) {
 
 function getSenderNumber(msg, from) {
   const jid = msg?.key?.participant || msg?.participant || msg?.key?.remoteJid || from;
-  return normalizeNumber(jid);
+  return normalizarNumero(jid);
 }
 
 function getOwners(settings) {
@@ -49,19 +49,17 @@ function getOwners(settings) {
   if (typeof settings?.ownerNumber === "string") owners.push(settings.ownerNumber);
   if (Array.isArray(settings?.owners)) owners.push(...settings.owners);
   if (typeof settings?.owner === "string") owners.push(settings.owner);
-  // por si tu botNumber coincide con owner (algunos lo usan así)
   if (typeof settings?.botNumber === "string") owners.push(settings.botNumber);
-
-  return owners.map(normalizeNumber).filter(Boolean);
+  return owners.map(normalizarNumero).filter(Boolean);
 }
 
-function isOwner(msg, from, settings) {
+function esOwner(msg, from, settings) {
   const sender = getSenderNumber(msg, from);
   const owners = getOwners(settings);
   return owners.includes(sender);
 }
 
-// Parse: 7d, 12h, 30m, 20s
+// 7d / 12h / 30m / 20s
 function parseDurationToMs(str) {
   const s = String(str || "").trim().toLowerCase();
   const m = s.match(/^(\d+)(s|m|h|d)$/);
@@ -72,7 +70,7 @@ function parseDurationToMs(str) {
     unit === "s" ? 1000 :
     unit === "m" ? 60_000 :
     unit === "h" ? 3_600_000 :
-    86_400_000; // d
+    86_400_000;
   return n * mult;
 }
 
@@ -89,7 +87,7 @@ function fmtMs(ms) {
   return `${s}s`;
 }
 
-function cleanExpiredAndZero(data) {
+function limpiarVencidos(data) {
   const now = Date.now();
   for (const [num, info] of Object.entries(data.users || {})) {
     if (!info) {
@@ -107,29 +105,25 @@ function cleanExpiredAndZero(data) {
   }
 }
 
-// ---------- Command ----------
+// ================== COMMAND ==================
 export default {
   name: "vip",
   command: ["vip"],
   category: "admin",
-  description: "Administra VIP con vencimiento y límite (solo owner)",
+  description: "Administra VIP (solo owner) con vencimiento y usos",
 
   run: async ({ sock, msg, from, args = [], settings }) => {
     try {
       if (!sock || !from) return;
 
       // ✅ Solo owner
-      if (!isOwner(msg, from, settings)) {
-        return sock.sendMessage(
-          from,
-          { text: "👑 Solo el owner puede usar este comando." },
-          { quoted: msg }
-        );
+      if (!esOwner(msg, from, settings)) {
+        return sock.sendMessage(from, { text: "👑 Solo el owner puede usar este comando." }, { quoted: msg });
       }
 
       const sub = String(args[0] || "").toLowerCase().trim();
       const data = readVip();
-      cleanExpiredAndZero(data);
+      limpiarVencidos(data);
       saveVip(data);
 
       // ✅ Ayuda
@@ -141,7 +135,8 @@ export default {
               `🔒 *Panel VIP*\n\n` +
               `➕ Dar VIP:\n` +
               `• *.vip add 519xxxxxxx 7d 50*\n` +
-              `   (duración: 7d/12h/30m/20s, usos: 50)\n\n` +
+              `   duración: 7d/12h/30m/20s\n` +
+              `   usos: 50\n\n` +
               `➖ Quitar VIP:\n` +
               `• *.vip del 519xxxxxxx*\n\n` +
               `📋 Ver:\n` +
@@ -168,16 +163,12 @@ export default {
             return `• ${num} — 🎟️ *${left}* — ⏳ *${exp}*`;
           });
 
-        return sock.sendMessage(
-          from,
-          { text: `📋 *VIP actuales:*\n\n${lines.join("\n")}` },
-          { quoted: msg }
-        );
+        return sock.sendMessage(from, { text: `📋 *VIP actuales:*\n\n${lines.join("\n")}` }, { quoted: msg });
       }
 
       // ✅ Check
       if (sub === "check") {
-        const num = normalizeNumber(args[1]);
+        const num = normalizarNumero(args[1]);
         if (!num) {
           return sock.sendMessage(from, { text: "⚠️ Uso: *.vip check 519xxxxxxx*" }, { quoted: msg });
         }
@@ -200,34 +191,28 @@ export default {
 
       // ✅ Add: .vip add <num> <dur> <uses>
       if (sub === "add") {
-        const num = normalizeNumber(args[1]);
+        const num = normalizarNumero(args[1]);
         const durStr = args[2];
         const usesStr = args[3];
 
         if (!num || !durStr || !usesStr) {
-          return sock.sendMessage(
-            from,
-            { text: "⚠️ Uso: *.vip add 519xxxxxxx 7d 50*" },
-            { quoted: msg }
-          );
+          return sock.sendMessage(from, { text: "⚠️ Uso: *.vip add 519xxxxxxx 7d 50*" }, { quoted: msg });
         }
 
         const durMs = parseDurationToMs(durStr);
         const uses = parseInt(usesStr, 10);
 
-        if (!durMs || !Number.isFinite(uses) || uses <= 0) {
-          return sock.sendMessage(
-            from,
-            { text: "⚠️ Duración inválida (ej: 7d/12h/30m/20s) o usos inválidos." },
-            { quoted: msg }
-          );
+        if (!durMs) {
+          return sock.sendMessage(from, { text: "⚠️ Duración inválida. Ej: 7d / 12h / 30m / 20s" }, { quoted: msg });
+        }
+        if (!Number.isFinite(uses) || uses <= 0) {
+          return sock.sendMessage(from, { text: "⚠️ Usos inválidos. Ej: 50" }, { quoted: msg });
         }
 
         data.users[num] = {
           expiresAt: Date.now() + durMs,
           usesLeft: uses,
         };
-
         saveVip(data);
 
         return sock.sendMessage(
@@ -239,7 +224,7 @@ export default {
 
       // ✅ Del
       if (sub === "del" || sub === "remove" || sub === "rm") {
-        const num = normalizeNumber(args[1]);
+        const num = normalizarNumero(args[1]);
         if (!num) {
           return sock.sendMessage(from, { text: "⚠️ Uso: *.vip del 519xxxxxxx*" }, { quoted: msg });
         }
@@ -261,3 +246,4 @@ export default {
     }
   },
 };
+
