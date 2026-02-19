@@ -1,10 +1,12 @@
+// mediafire.js (ESM)
+// npm i axios
 import fs from "fs";
 import path from "path";
 import axios from "axios";
 
 const VIP_FILE = path.join(process.cwd(), "settings", "vip.json");
 
-// ================== VIP HELPERS (mismo estilo que tu vip.js) ==================
+// ================== VIP HELPERS ==================
 function ensureVipFile() {
   const dir = path.dirname(VIP_FILE);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -29,6 +31,7 @@ function saveVip(data) {
 }
 
 function normId(x) {
+  // Para números y LID: deja solo dígitos
   return String(x || "")
     .split("@")[0]
     .split(":")[0]
@@ -47,10 +50,11 @@ function getSenderId(msg, from) {
 function getOwnersIds(settings) {
   const ids = [];
 
+  // ownerNumbers
   if (Array.isArray(settings?.ownerNumbers)) ids.push(...settings.ownerNumbers);
   if (typeof settings?.ownerNumber === "string") ids.push(settings.ownerNumber);
 
-  // ✅ ownerLids
+  // ownerLids (para @lid)
   if (Array.isArray(settings?.ownerLids)) ids.push(...settings.ownerLids);
   if (typeof settings?.ownerLid === "string") ids.push(settings.ownerLid);
 
@@ -66,6 +70,7 @@ function esOwner(msg, from, settings) {
   return owners.includes(senderId);
 }
 
+// limpia expirados o sin usos
 function limpiar(data) {
   const now = Date.now();
   for (const [num, info] of Object.entries(data.users || {})) {
@@ -87,8 +92,7 @@ function fmtMs(ms) {
   return `${s}s`;
 }
 
-// ✅ valida VIP (y opcionalmente consume uso)
-function getVipInfo(senderId, data) {
+function vipValido(senderId, data) {
   limpiar(data);
   const info = data.users?.[senderId];
   if (!info) return null;
@@ -104,19 +108,17 @@ function getVipInfo(senderId, data) {
 }
 
 // ================== API CONFIG ==================
-const API_KEY = "dvyer";
-const API_BASE = "https://api-adonix.ultraplus.click";
+const APIKEY = "dvyer";
 
-// ⚠️ CAMBIA SOLO ESTO (ruta real)
-const API_ENDPOINT = "/MEDIAFIRE_ENDPOINT"; 
-// Ej: "/api/mediafire" o "/downloader/mediafire" o "/mediafire"
+// ⚠️ Pon aquí TU endpoint real (la ruta que ya usas en tu bot)
+const API_URL = "https://api-adonix.ultraplus.click/METETU_ENDPOINT_AQUI";
 
 // ================== COMMAND ==================
 export default {
   name: "mediafire",
   command: ["mf", "mediafire"],
   category: "downloader",
-  description: "Convierte MediaFire a link directo usando la API (owner/VIP)",
+  description: "Convierte MediaFire a link directo usando API (owner/VIP)",
 
   run: async ({ sock, msg, from, args = [], settings }) => {
     try {
@@ -126,11 +128,12 @@ export default {
       const owner = esOwner(msg, from, settings);
 
       // 🔐 Permisos: owner o VIP
-      const data = readVip();
-      limpiar(data);
-      saveVip(data);
+      const vipData = readVip();
+      limpiar(vipData);
+      saveVip(vipData);
 
-      const vip = owner ? null : getVipInfo(senderId, data);
+      const vip = owner ? null : vipValido(senderId, vipData);
+
       if (!owner && !vip) {
         return sock.sendMessage(
           from,
@@ -148,37 +151,36 @@ export default {
         );
       }
 
-      // ✅ Llamar API
-      const apiUrl = `${API_BASE}${API_ENDPOINT}`;
-      const { data: res } = await axios.get(apiUrl, {
-        params: { key: API_KEY, url },
+      // ✅ Llamada a tu API (AUTH con apikey)
+      const { data: res } = await axios.get(API_URL, {
+        params: { apikey: APIKEY, url }, // ✅ AQUÍ VA apikey
         timeout: 30000,
       });
 
       if (!res?.status || !res?.result?.link) {
         return sock.sendMessage(
           from,
-          { text: "❌ La API no devolvió un link válido para ese MediaFire." },
+          { text: `❌ La API no devolvió link válido.\n${res?.error ? `🧩 Error: ${res.error}` : ""}` },
           { quoted: msg }
         );
       }
 
       // ✅ Consumir 1 uso si es VIP (no owner)
       if (!owner) {
-        const info = data.users[senderId];
+        const info = vipData.users[senderId];
         if (info && typeof info.usesLeft === "number") {
           info.usesLeft = Math.max(0, info.usesLeft - 1);
-          saveVip(data);
+          saveVip(vipData);
         }
       }
 
       const r = res.result;
       const now = Date.now();
 
-      // info vip para mostrar
+      // Footer VIP
       let vipFooter = "";
       if (!owner) {
-        const info = data.users[senderId];
+        const info = vipData.users[senderId];
         const left = typeof info?.usesLeft === "number" ? info.usesLeft : "∞";
         const exp = typeof info?.expiresAt === "number" ? fmtMs(info.expiresAt - now) : "∞";
         vipFooter = `\n\n🎟️ *VIP usos restantes:* ${left}\n⏳ *VIP vence en:* ${exp}`;
@@ -194,11 +196,12 @@ export default {
         vipFooter;
 
       return sock.sendMessage(from, { text: out }, { quoted: msg });
+
     } catch (e) {
       console.error("[MF] Error:", e?.response?.data || e?.message || e);
       return sock.sendMessage(
         from,
-        { text: "❌ Error en el comando MediaFire. Revisa consola / endpoint / key." },
+        { text: "❌ Error en MediaFire. Revisa consola / endpoint / apikey." },
         { quoted: msg }
       );
     }
