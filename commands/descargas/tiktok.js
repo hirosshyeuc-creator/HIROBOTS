@@ -10,7 +10,7 @@ const LINE = "━━━━━━━━━━━━━━━━━━━━";
 
 // ================= COMANDO =================
 export default {
-  command: ["tiktok", "tt"],
+  command: ["tiktok",],
   category: "descarga",
 
   run: async ({ sock, from, args }) => {
