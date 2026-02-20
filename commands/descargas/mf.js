@@ -9,12 +9,19 @@ export default {
   category: "descarga",
 
   run: async ({ sock, from, args }) => {
-
     try {
 
-      if (!args.length) {
+      if (!args[0]) {
         return sock.sendMessage(from, {
           text: "❌ Usa:\n.mf <link de mediafire>"
+        });
+      }
+
+      const url = args[0];
+
+      if (!url.includes("mediafire.com")) {
+        return sock.sendMessage(from, {
+          text: "❌ Enlace inválido."
         });
       }
 
@@ -22,7 +29,8 @@ export default {
         text: "📥 Procesando enlace..."
       });
 
-      const api = `${API_URL}?apikey=${API_KEY}&url=${encodeURIComponent(args[0])}`;
+      // 🔹 1️⃣ Obtener datos desde tu API
+      const api = `${API_URL}?apikey=${API_KEY}&url=${encodeURIComponent(url)}`;
       const { data } = await axios.get(api);
 
       if (!data.status || !data.result?.link) {
@@ -31,7 +39,7 @@ export default {
 
       const file = data.result;
 
-      // 📦 Detectar tamaño
+      // 🔹 2️⃣ Detectar tamaño real
       let sizeMB = 0;
 
       if (file.size?.includes("MB")) {
@@ -40,6 +48,7 @@ export default {
         sizeMB = parseFloat(file.size) * 1024;
       }
 
+      // 🔹 3️⃣ Si supera límite → solo enviar link
       if (sizeMB > MAX_MB) {
         return sock.sendMessage(from, {
           text:
@@ -52,24 +61,29 @@ export default {
       }
 
       await sock.sendMessage(from, {
-        text: `⚡ Enviando archivo (${file.size})...`
+        text: `⚡ Descargando archivo (${file.size})...`
       });
 
-      // 🔥 STREAM REAL (sin /tmp)
+      // 🔹 4️⃣ Descargar como stream
       const response = await axios({
         method: "GET",
         url: file.link,
-        responseType: "stream",
+        responseType: "arraybuffer", // 🔥 MÁS ESTABLE QUE STREAM
         timeout: 0,
         maxContentLength: Infinity,
         maxBodyLength: Infinity
       });
 
-      // 📤 Enviar como documento por stream
+      const buffer = Buffer.from(response.data);
+
+      // 🔹 5️⃣ Detectar mimetype automáticamente
+      const contentType = response.headers["content-type"] || "application/octet-stream";
+
+      // 🔹 6️⃣ Enviar correctamente según tipo
       await sock.sendMessage(from, {
-        document: response.data,
+        document: buffer,
         fileName: file.filename,
-        mimetype: "application/octet-stream",
+        mimetype: contentType,
         caption:
           `📁 *MediaFire Downloader*\n\n` +
           `📄 Archivo: ${file.filename}\n` +
@@ -79,13 +93,12 @@ export default {
 
     } catch (err) {
 
-      console.error("MEDIAFIRE STREAM ERROR:", err.message);
+      console.error("MEDIAFIRE ERROR:", err);
 
       await sock.sendMessage(from, {
         text: "❌ Error enviando archivo."
       });
 
     }
-
   }
 };
