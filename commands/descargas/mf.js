@@ -1,6 +1,4 @@
 import axios from "axios";
-import fs from "fs";
-import path from "path";
 
 const API_KEY = "dvyer";
 const API_URL = "https://api-adonix.ultraplus.click/download/mediafire";
@@ -11,65 +9,81 @@ export default {
   category: "descarga",
 
   run: async ({ sock, from, args }) => {
-    let filePath;
 
     try {
 
       if (!args[0]) {
         return sock.sendMessage(from, {
-          text: "❌ Usa:\n.mf <link>"
+          text: "❌ Usa:\n.mf <link de mediafire>"
         });
       }
 
-      await sock.sendMessage(from, { text: "📥 Procesando..." });
+      const url = args[0];
 
-      const api = `${API_URL}?apikey=${API_KEY}&url=${encodeURIComponent(args[0])}`;
+      if (!url.includes("mediafire.com")) {
+        return sock.sendMessage(from, {
+          text: "❌ Enlace inválido."
+        });
+      }
+
+      await sock.sendMessage(from, {
+        text: "📥 Procesando enlace..."
+      });
+
+      // 🔹 Consultar API
+      const api = `${API_URL}?apikey=${API_KEY}&url=${encodeURIComponent(url)}`;
       const { data } = await axios.get(api);
 
       if (!data.status || !data.result?.link) {
-        throw new Error("API inválida");
+        throw new Error("Respuesta inválida de la API");
       }
 
       const file = data.result;
 
-      // 📂 Ruta temporal
-      filePath = path.join("/tmp", file.filename);
+      // 🔹 Detectar tamaño
+      let sizeMB = 0;
 
-      // 🔽 Descargar a /tmp
-      const response = await axios({
-        method: "GET",
-        url: file.link,
-        responseType: "stream"
-      });
+      if (file.size?.includes("MB")) {
+        sizeMB = parseFloat(file.size);
+      } else if (file.size?.includes("GB")) {
+        sizeMB = parseFloat(file.size) * 1024;
+      }
 
-      const writer = fs.createWriteStream(filePath);
-      response.data.pipe(writer);
+      // 🔹 Si supera límite → solo enviar link
+      if (sizeMB > MAX_MB) {
+        return sock.sendMessage(from, {
+          text:
+            `📁 *MediaFire Downloader*\n\n` +
+            `📄 Archivo: ${file.filename}\n` +
+            `📦 Tamaño: ${file.size}\n\n` +
+            `⚠️ Supera el límite de ${MAX_MB}MB\n\n` +
+            `🔗 Descargar aquí:\n${file.link}`
+        });
+      }
 
-      await new Promise((resolve, reject) => {
-        writer.on("finish", resolve);
-        writer.on("error", reject);
-      });
-
-      // 📤 Enviar archivo
       await sock.sendMessage(from, {
-        document: fs.readFileSync(filePath),
+        text: `⚡ Enviando archivo (${file.size})...`
+      });
+
+      // 🔥 ENVÍO DIRECTO POR URL (NO USA DISCO NI RAM)
+      await sock.sendMessage(from, {
+        document: { url: file.link },
         fileName: file.filename,
-        mimetype: "application/octet-stream"
+        mimetype: "application/octet-stream",
+        caption:
+          `📁 *MediaFire Downloader*\n\n` +
+          `📄 Archivo: ${file.filename}\n` +
+          `📦 Tamaño: ${file.size}\n\n` +
+          `🤖 SonGokuBot`
       });
 
     } catch (err) {
-      console.error("ERROR:", err.message);
+
+      console.error("MEDIAFIRE ERROR:", err.message);
+
       await sock.sendMessage(from, {
-        text: "❌ Error enviando archivo."
+        text: "❌ Error procesando el archivo."
       });
-
-    } finally {
-
-      // 🔥 BORRAR ARCHIVO SI EXISTE
-      if (filePath && fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-        console.log("🗑 Archivo eliminado de /tmp");
-      }
 
     }
   }
