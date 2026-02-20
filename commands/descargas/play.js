@@ -1,322 +1,282 @@
+import fs from "fs";
+import fsp from "fs/promises";
+import path from "path";
+import axios from "axios";
 import yts from "yt-search";
+import { pipeline } from "stream/promises";
 
-// ✅ Config
-const TTL_MS = 40 * 1000; // 40 segundos
-const CLEAN_INTERVAL_MS = 1000; // limpia cada 1s
+const API_URL = "https://gawrgura-api.onrender.com/download/ytdl";
 
-// Guardar búsqueda por "chat + usuario"
-const lastSearchByKey = new Map();
-/**
- * key = `${from}:${senderJid}`
- * value = { ts, query, results, ownerJid, resultsMsgId }
- */
+// ✅ TMP propio dentro del proyecto (más control y limpieza)
+const TMP_DIR = path.join(process.cwd(), "tmp");
 
-// Limpieza automática (borra búsquedas viejas)
-setInterval(() => {
+// ⛔ Ajusta límites según tu host/WhatsApp
+const MAX_BYTES = 90 * 1024 * 1024; // 90MB
+const MAX_SECONDS = 20 * 60; // 20 min (evita cosas gigantes)
+const COOLDOWN_TIME = 40000; // ✅ 40 segundos
+
+const cooldowns = new Map();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ✅ cola global (evita muchas descargas simultáneas)
+let busy = false;
+async function withGlobalLock(fn) {
+  while (busy) await sleep(400);
+  busy = true;
+  try {
+    return await fn();
+  } finally {
+    busy = false;
+  }
+}
+
+function ensureTmp() {
+  if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
+  process.env.TMPDIR = TMP_DIR;
+  process.env.TMP = TMP_DIR;
+  process.env.TEMP = TMP_DIR;
+}
+ensureTmp();
+
+async function cleanTmp(dir, maxAgeMs = 60 * 60 * 1000) {
   const now = Date.now();
-  for (const [key, data] of lastSearchByKey.entries()) {
-    if (!data || now - data.ts > TTL_MS) {
-      lastSearchByKey.delete(key);
+  let files = [];
+  try {
+    files = await fsp.readdir(dir);
+  } catch {
+    return;
+  }
+  for (const name of files) {
+    const p = path.join(dir, name);
+    try {
+      const st = await fsp.stat(p);
+      if (st.isFile() && now - st.mtimeMs > maxAgeMs) {
+        await fsp.unlink(p);
+      }
+    } catch {}
+  }
+}
+
+// limpia cada 10 min lo viejo
+setInterval(() => cleanTmp(TMP_DIR).catch(() => {}), 10 * 60 * 1000);
+
+function isENOSPC(err) {
+  return (
+    err?.code === "ENOSPC" ||
+    err?.errno === -28 ||
+    String(err?.message || "").includes("ENOSPC")
+  );
+}
+
+async function axiosGetWithRetry(url, opts, retries = 2) {
+  let lastErr;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await axios.get(url, opts);
+    } catch (e) {
+      lastErr = e;
+      const code = e?.response?.status;
+      const retryable =
+        !code ||
+        code >= 500 ||
+        code === 429 ||
+        e?.code === "ECONNRESET" ||
+        e?.code === "ETIMEDOUT" ||
+        e?.code === "ECONNABORTED";
+
+      if (!retryable || i === retries) throw lastErr;
+      await sleep(500 * (i + 1));
     }
   }
-}, CLEAN_INTERVAL_MS);
-
-function humanViews(n) {
-  if (!Number.isFinite(n)) return null;
-  if (n >= 1e9) return (n / 1e9).toFixed(1).replace(".0", "") + "B";
-  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(".0", "") + "M";
-  if (n >= 1e3) return (n / 1e3).toFixed(1).replace(".0", "") + "K";
-  return String(n);
+  throw lastErr;
 }
 
-function headerBox(title) {
-  return `🎵 *${title}*\n────────────────────`;
+async function axiosHeadSafe(url) {
+  try {
+    const res = await axios.head(url, {
+      timeout: 15000,
+      maxRedirects: 5,
+      headers: { "User-Agent": "Mozilla/5.0" },
+    });
+    const len = Number(res?.headers?.["content-length"] || 0);
+    return len || 0;
+  } catch {
+    return 0;
+  }
 }
 
-function footerHint() {
-  return (
-    `────────────────────\n` +
-    `✅ MP3: *responde a la lista* y escribe: *.play 1*\n` +
-    `🎬 MP4: *responde a la lista* y escribe: *.play video 1*\n` +
-    `⏳ La búsqueda dura *20s*`
-  );
-}
+async function downloadToFile(mp4Url, filePath) {
+  const res = await axios.get(mp4Url, {
+    responseType: "stream",
+    timeout: 120000,
+    maxRedirects: 5,
+    headers: { "User-Agent": "Mozilla/5.0" },
+  });
 
-function buildHelp() {
-  return (
-    headerBox("PLAY") +
-    `\n\n` +
-    `🔎 *Busca en YouTube* y descarga al elegir.\n\n` +
-    `✅ *Buscar*\n` +
-    `• *.play <canción o artista>*\n` +
-    `Ej: *.play yellow coldplay*\n\n` +
-    `✅ *Elegir (solo 20s)*\n` +
-    `• Responde al mensaje de resultados y escribe:\n` +
-    `  *.play 1* / *.play 2* ...\n\n` +
-    `🎬 *Video*\n` +
-    `• Responde y escribe: *.play video 1*\n\n` +
-    footerHint()
-  );
-}
+  await pipeline(res.data, fs.createWriteStream(filePath));
 
-function buildResultsMessage(query, videos) {
-  const list = videos
-    .map((v, i) => {
-      const dur = v.timestamp || v.duration?.timestamp || "N/A";
-      const chan = v.author?.name || "N/A";
-      const views = v.views ? humanViews(v.views) : null;
-      const ago = v.ago || null;
-      const extra = [views ? `👁️ ${views}` : null, ago ? `📅 ${ago}` : null].filter(Boolean).join(" • ");
-
-      return (
-        `*${i + 1})* ${v.title}\n` +
-        `⏱️ ${dur}  •  👤 ${chan}` +
-        (extra ? `\n${extra}` : "")
-      );
-    })
-    .join("\n\n");
-
-  return (
-    headerBox("PLAY — Resultados") +
-    `\n🔎 _${query}_\n\n` +
-    list +
-    `\n\n` +
-    footerHint()
-  );
-}
-
-function buildChosenText(v, isVideoMode) {
-  const dur = v.timestamp || v.duration?.timestamp || "N/A";
-  const chan = v.author?.name || "N/A";
-  const views = v.views ? humanViews(v.views) : null;
-  const ago = v.ago || null;
-  const extra = [views ? `👁️ ${views}` : null, ago ? `📅 ${ago}` : null].filter(Boolean).join(" • ");
-
-  return (
-    headerBox("PLAY — Selección") +
-    `\n\n` +
-    `✅ *${v.title}*\n` +
-    `⏱️ ${dur}  •  👤 ${chan}\n` +
-    (extra ? `${extra}\n` : "") +
-    `🔗 ${v.url}\n\n` +
-    (isVideoMode ? "📥 Descargando *MP4*..." : "🎧 Descargando *MP3*...")
-  );
-}
-
-function makeExternalPreview({ title, body, thumbnailUrl, sourceUrl }) {
-  if (!thumbnailUrl) return undefined;
-  return {
-    externalAdReply: {
-      title: title || "YouTube",
-      body: body || "",
-      thumbnailUrl,
-      sourceUrl: sourceUrl || "",
-      mediaType: 1,
-      renderLargerThumbnail: true,
-      showAdAttribution: false,
-    },
-  };
-}
-
-// ✅ sacar JID del usuario
-function getSenderJid(msg, from) {
-  return msg?.key?.participant || from;
-}
-
-// ✅ obtener el id del mensaje al que respondió (quoted)
-function getQuotedMessageId(msg) {
-  const m = msg?.message;
-  const ctx =
-    m?.extendedTextMessage?.contextInfo ||
-    m?.imageMessage?.contextInfo ||
-    m?.videoMessage?.contextInfo ||
-    m?.documentMessage?.contextInfo ||
-    null;
-
-  // stanzaId suele ser el ID del mensaje citado
-  return ctx?.stanzaId || null;
+  const size = fs.statSync(filePath).size;
+  if (size < 700000) throw new Error("Archivo incompleto (muy pequeño)");
+  if (MAX_BYTES && size > MAX_BYTES)
+    throw new Error("Archivo supera el límite permitido");
+  return size;
 }
 
 export default {
-  name: "play",
-  command: ["play"],
+  command: ["ytmp4"],
   category: "descarga",
 
-  run: async ({ sock, msg, from, args = [], comandos }) => {
+  run: async (ctx) => {
+    const { sock, from, args } = ctx;
+    const msg = ctx.m || ctx.message || ctx.msg || null;
+    const messageKey = msg?.key || null;
+
+    const userId = from;
+    const now = Date.now();
+
+    let rawMp4 = null;
+
+    // 🔒 COOLDOWN
+    const cooldown = cooldowns.get(userId);
+    if (cooldown && cooldown > now) {
+      return sock.sendMessage(from, {
+        text: `⏳ Espera *${Math.ceil((cooldown - now) / 1000)}s* para volver a usar .ytmp4`,
+      });
+    }
+    cooldowns.set(userId, now + COOLDOWN_TIME);
+
     try {
-      if (!sock || !from) return;
-
-      const senderJid = getSenderJid(msg, from);
-      const key = `${from}:${senderJid}`;
-
-      const input = Array.isArray(args) ? args.join(" ").trim() : String(args ?? "").trim();
-      const text = input.replace(/\s+/g, " ");
-
-      // ✅ Ayuda
-      if (!text) {
-        return await sock.sendMessage(from, { text: buildHelp() }, { quoted: msg });
+      if (!args || !args.length) {
+        cooldowns.delete(userId); // ✅ no castigues si lo usó mal
+        return sock.sendMessage(from, {
+          text:
+            "❌ *Uso correcto:*\n\n" +
+            "• `.ytmp4 https://youtube.com/...`\n" +
+            "• `.ytmp4 nombre del video`",
+        });
       }
 
-      // ✅ Modo: "video 1" / "mp4 1"
-      const parts = text.split(/\s+/);
-      const modeWord = (parts[0] || "").toLowerCase();
-      const isVideoMode = ["video", "mp4"].includes(modeWord);
-      const maybeNumber = isVideoMode ? parts[1] : parts[0];
+      if (messageKey) {
+        await sock.sendMessage(from, { react: { text: "⏳", key: messageKey } });
+      }
 
-      // ✅ Selección por número (OBLIGATORIO responder al mensaje)
-      if (/^\d+$/.test(maybeNumber || "")) {
-        const data = lastSearchByKey.get(key);
+      ensureTmp();
+      await cleanTmp(TMP_DIR).catch(() => {});
 
-        if (!data?.results?.length) {
-          return await sock.sendMessage(
-            from,
-            { text: "⚠️ No tienes una búsqueda activa. Usa *.play <texto>* y elige en 20s." },
-            { quoted: msg }
-          );
+      let query = args.join(" ").trim();
+      let videoUrl = query;
+
+      // 🔍 Si no es link, buscar en YouTube (filtra largos)
+      if (!/^https?:\/\//i.test(query)) {
+        const search = await yts(query);
+        if (!search?.videos?.length) throw new Error("Sin resultados");
+
+        const pick =
+          search.videos.find(
+            (v) => v?.seconds && v.seconds <= MAX_SECONDS && !v.live
+          ) || search.videos[0];
+
+        videoUrl = pick.url;
+      }
+
+      // 🌐 Pedir MP4 a tu API
+      const { data } = await axiosGetWithRetry(
+        `${API_URL}?url=${encodeURIComponent(videoUrl)}`,
+        { timeout: 25000 },
+        2
+      );
+
+      if (!data?.status || !data?.result?.mp4) {
+        throw new Error("API inválida o sin mp4");
+      }
+
+      const mp4Url = data.result.mp4;
+      if (typeof mp4Url !== "string" || !mp4Url.startsWith("http")) {
+        throw new Error("mp4Url inválido");
+      }
+
+      // ✅ chequeo de tamaño antes (si el server lo da)
+      const len = await axiosHeadSafe(mp4Url);
+      if (len && len > MAX_BYTES) {
+        throw new Error(
+          `El video pesa ~${Math.ceil(len / (1024 * 1024))}MB y supera el límite (${Math.ceil(
+            MAX_BYTES / (1024 * 1024)
+          )}MB).`
+        );
+      }
+
+      // ⬇️ Descargar y 📤 enviar con cola global
+      await withGlobalLock(async () => {
+        rawMp4 = path.join(TMP_DIR, `${Date.now()}_video.mp4`);
+
+        let ok = false;
+        let lastErr = null;
+
+        for (let i = 0; i < 3; i++) {
+          try {
+            await downloadToFile(mp4Url, rawMp4);
+            ok = true;
+            break;
+          } catch (e) {
+            lastErr = e;
+            if (isENOSPC(e)) break;
+            await sleep(1500 * (i + 1));
+          }
         }
 
-        // ⏳ Expirada
-        if (Date.now() - data.ts > TTL_MS) {
-          lastSearchByKey.delete(key);
-          return await sock.sendMessage(
-            from,
-            { text: "⏳ Tu búsqueda expiró (40s). Haz otra: *.play <texto>*" },
-            { quoted: msg }
-          );
-        }
-
-        // 🔒 Debe responder al mensaje de resultados
-        const quotedId = getQuotedMessageId(msg);
-        if (!quotedId || quotedId !== data.resultsMsgId) {
-          return await sock.sendMessage(
-            from,
-            { text: "📌 *Responde al mensaje de resultados* y escribe: *.play 1*" },
-            { quoted: msg }
-          );
-        }
-
-        const pick = parseInt(maybeNumber, 10);
-        if (pick < 1 || pick > data.results.length) {
-          return await sock.sendMessage(
-            from,
-            { text: `⚠️ Elige un número entre 1 y ${data.results.length}.` },
-            { quoted: msg }
-          );
-        }
-
-        const chosen = data.results[pick - 1];
-
-        // Comando real
-        const cmdName = isVideoMode ? "ytmp4" : "ytmp3";
-        const cmd = comandos?.get?.(cmdName);
-
-        if (!cmd || typeof cmd.run !== "function") {
-          return await sock.sendMessage(
-            from,
-            {
-              text:
-                headerBox("PLAY") +
-                `\n\n✅ Elegiste: *${chosen.title}*\n` +
-                `🔗 ${chosen.url}\n\n` +
-                `⚠️ No encontré el comando *${cmdName}*.\n` +
-                `Usa manual:\n• *.ytmp3 ${chosen.url}*`,
-            },
-            { quoted: msg }
-          );
-        }
-
-        // ✅ Miniatura del ELEGIDO
-        const dur = chosen.timestamp || chosen.duration?.timestamp || "N/A";
-        const chan = chosen.author?.name || "N/A";
-        const chosenPreview = makeExternalPreview({
-          title: chosen.title,
-          body: `⏱ ${dur} • 👤 ${chan}`,
-          thumbnailUrl: chosen.thumbnail,
-          sourceUrl: chosen.url,
-        });
+        if (!ok) throw lastErr || new Error("Fallo descarga");
 
         await sock.sendMessage(
           from,
-          { text: buildChosenText(chosen, isVideoMode), contextInfo: chosenPreview },
-          { quoted: msg }
+          {
+            video: { url: rawMp4 },
+            mimetype: "video/mp4",
+          },
+          msg?.key ? { quoted: msg } : undefined
         );
 
-        // Ejecuta ytmp3/ytmp4 internamente
-        await cmd.run({
-          sock,
-          msg,
-          from,
-          args: [chosen.url],
-          comandos,
-        });
-
-        // ✅ Una vez elegido, borramos para que no reutilicen después
-        lastSearchByKey.delete(key);
-        return;
-      }
-
-      // ✅ Protección query larga
-      if (text.length > 120) {
-        return await sock.sendMessage(
-          from,
-          { text: "⚠️ Tu búsqueda es muy larga. Máx 120 caracteres." },
-          { quoted: msg }
-        );
-      }
-
-      // ✅ Buscar
-      await sock.sendMessage(
-        from,
-        { text: `${headerBox("PLAY")}\n\n🔎 Buscando: *${text}* ...` },
-        { quoted: msg }
-      );
-
-      const res = await yts(text);
-      const videosAll = Array.isArray(res?.videos) ? res.videos : [];
-      const videos = videosAll.filter(v => v?.url && v?.title).slice(0, 5);
-
-      if (!videos.length) {
-        return await sock.sendMessage(
-          from,
-          { text: "❌ No encontré resultados. Prueba con otro texto." },
-          { quoted: msg }
-        );
-      }
-
-      // ✅ Miniatura del TOP
-      const top = videos[0];
-      const topDur = top.timestamp || top.duration?.timestamp || "N/A";
-      const topChan = top.author?.name || "N/A";
-      const topPreview = makeExternalPreview({
-        title: `Top: ${top.title}`,
-        body: `⏱ ${topDur} • 👤 ${topChan}`,
-        thumbnailUrl: top.thumbnail,
-        sourceUrl: top.url,
+        // ✅ limpia apenas termina (por si falla afuera)
+        try {
+          if (rawMp4 && fs.existsSync(rawMp4)) fs.unlinkSync(rawMp4);
+        } catch {}
       });
 
-      // Mandar lista y guardar el ID del mensaje enviado
-      const sent = await sock.sendMessage(
-        from,
-        { text: buildResultsMessage(text, videos), contextInfo: topPreview },
-        { quoted: msg }
-      );
-
-      // ✅ Guardar búsqueda por usuario + id del mensaje de resultados
-      lastSearchByKey.set(key, {
-        ts: Date.now(),
-        query: text,
-        results: videos,
-        ownerJid: senderJid,
-        resultsMsgId: sent?.key?.id || null,
-      });
-
-      // Si por algún motivo no pudimos guardar el msgId, igual sirve TTL,
-      // pero la regla "responde al mensaje" no podría validarse.
+      if (messageKey) {
+        await sock.sendMessage(from, { react: { text: "✅", key: messageKey } });
+      }
     } catch (err) {
-      console.error("[PLAY] Error:", err);
+      console.error("YTMP4 ERROR:", err?.message || err);
+
+      cooldowns.delete(userId); // ✅ libera cooldown si falló
+
+      if (messageKey) {
+        try {
+          await sock.sendMessage(from, { react: { text: "❌", key: messageKey } });
+        } catch {}
+      }
+
+      if (isENOSPC(err)) {
+        try {
+          await cleanTmp(TMP_DIR, 0);
+        } catch {}
+        return sock.sendMessage(from, {
+          text:
+            "❌ *Sin espacio en el servidor (ENOSPC).* Ya limpié temporales.\n\n" +
+            "✅ Solución: libera espacio en el host o aumenta el almacenamiento.",
+        });
+      }
+
+      await sock.sendMessage(from, {
+        text: `❌ Error al descargar/enviar el video.\n${err?.message ? `\n🧾 ${err.message}` : ""}`,
+      });
+    } finally {
+      // 🧹 Limpieza extra por seguridad
       try {
-        await sock.sendMessage(from, { text: "❌ Error en *play*. Revisa consola." }, { quoted: msg });
+        if (rawMp4 && fs.existsSync(rawMp4)) fs.unlinkSync(rawMp4);
       } catch {}
     }
   },
 };
+
+process.on("uncaughtException", (e) => console.error("Uncaught:", e));
+process.on("unhandledRejection", (e) => console.error("Unhandled:", e));
