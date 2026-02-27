@@ -9,7 +9,7 @@ if (!fs.existsSync(TMP_DIR)) {
   fs.mkdirSync(TMP_DIR, { recursive: true });
 }
 
-const BASE_URL = 'https://api-sky.ultraplus.click';  // URL base del servidor de la API
+const BASE_URL = 'https://api-sky.ultraplus.click'; // Base URL del servidor de la API
 
 export default {
   command: ['ytmp1'],
@@ -21,33 +21,32 @@ export default {
 
     if (!args.length) {
       return sock.sendMessage(from, {
-        text: "❌ Usa el comando con un link de YouTube o el nombre del video: .ytmp1 <link o nombre del video>",
+        text: "❌ Uso: .ytmp1 <link o nombre del video>",
         ...global.channelInfo,
       });
     }
 
-    const query = args.join(' ');  // Obtenemos el nombre o el link del video
-
     try {
-      // Usamos yt-search para buscar el video
-      const search = await yts(query);
-      if (!search.videos.length) {
-        throw new Error('No se encontró el video');
+
+      let query = args.join(' ');
+      let videoUrl = query;
+
+      // Si no es link, hacer búsqueda con yt-search
+      if (!/^https?:\/\//i.test(query)) {
+        const search = await yts(query);
+        if (!search.videos.length) {
+          throw new Error('No se encontró el video');
+        }
+        videoUrl = search.videos[0].url;
       }
 
-      // Tomamos el primer resultado de la búsqueda
-      const video = search.videos[0];
-      const videoUrl = video.url;  // URL del video de YouTube
-
-      console.log("URL del video encontrado:", videoUrl); // Depuración: Verificar la URL del video
-
-      // 1) Obtener el enlace de descarga en calidad 360p
-      const resolveResponse = await axios.post(
-        'https://api-sky.ultraplus.click/youtube-mp4/resolve',
+      // Obtener enlace en 360p con /resolve
+      const resolve = await axios.post(
+        `${BASE_URL}/youtube-mp4/resolve`,
         {
           url: videoUrl,
           type: 'video',
-          quality: '360', // Solicitamos calidad 360p
+          quality: '360',
         },
         {
           headers: {
@@ -57,30 +56,24 @@ export default {
         }
       );
 
-      // Depuración: Verificar la respuesta completa de la API
-      console.log("Respuesta de la API:", resolveResponse.data);
-
-      // Aquí obtenemos el enlace de descarga y construimos la URL completa
-      const relativeDownloadUrl = resolveResponse.data?.media?.dl_download;
-      if (!relativeDownloadUrl) {
-        throw new Error('No se pudo obtener el enlace de descarga');
-      }
+      const rel = resolve.data?.result?.media?.dl_download;
+      if (!rel) throw new Error('No se encontró enlace de descarga');
 
       // Construir la URL completa usando la URL base
-      const downloadUrl = BASE_URL + relativeDownloadUrl;
+      const downloadUrl = BASE_URL + rel;
       console.log('Enlace de descarga:', downloadUrl);  // Depuración: Verificar el enlace de descarga completo
 
       // 2) Descargar el archivo
       const videoFilePath = path.join(TMP_DIR, 'video_360p.mp4');
       const writer = fs.createWriteStream(videoFilePath);
 
-      const videoResponse = await axios({
+      const videoRes = await axios({
         url: downloadUrl,
         method: 'GET',
         responseType: 'stream',
       });
 
-      videoResponse.data.pipe(writer);
+      videoRes.data.pipe(writer);
 
       // Cuando el archivo se haya descargado
       writer.on('finish', async () => {
@@ -89,7 +82,7 @@ export default {
           {
             video: fs.readFileSync(videoFilePath),
             mimetype: 'video/mp4',
-            caption: `🎬 Video descargado en 360p: ${video.title}`,
+            caption: `🎬 Video descargado en 360p`,
             ...global.channelInfo,
           },
           msg?.key ? { quoted: msg } : undefined
@@ -104,12 +97,12 @@ export default {
       });
 
     } catch (err) {
-      console.error("Error en el comando YTMP1:", err);
+      console.error('❌ Error en YTMP1:', err);
       await sock.sendMessage(
         from,
-        { text: "❌ Error al procesar el video. Intenta nuevamente." },
+        { text: '❌ No se pudo descargar el video' },
         msg ? { quoted: msg } : undefined
       );
     }
-  },
+  }
 };
