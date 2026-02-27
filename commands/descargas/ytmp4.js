@@ -1,3 +1,4 @@
+
 import fs from "fs";
 import path from "path";
 import axios from "axios";
@@ -10,10 +11,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const cooldowns = new Map();
 
-// Nueva carpeta "ytmp4" para los archivos temporales
-const YTMP4_DIR = path.join(process.cwd(), "ytmp4");
-if (!fs.existsSync(YTMP4_DIR)) {
-  fs.mkdirSync(YTMP4_DIR, { recursive: true });
+const TMP_DIR = path.join(process.cwd(), "tmp");
+if (!fs.existsSync(TMP_DIR)) {
+  fs.mkdirSync(TMP_DIR, { recursive: true });
 }
 
 export default {
@@ -32,8 +32,7 @@ export default {
       const wait = cooldowns.get(userId) - Date.now();
       if (wait > 0) {
         return sock.sendMessage(from, {
-          text: `⏳ Espera ${Math.ceil(wait / 1000)}s`,
-          ...global.channelInfo
+          text: `⏳ Espera ${Math.ceil(wait / 1000)}s`
         });
       }
     }
@@ -43,8 +42,7 @@ export default {
       if (!args.length) {
         cooldowns.delete(userId);
         return sock.sendMessage(from, {
-          text: "❌ Escribe el nombre o link del video",
-          ...global.channelInfo
+          text: "❌ Escribe el nombre o link del video"
         });
       }
 
@@ -52,9 +50,8 @@ export default {
       let videoUrl;
       let title = "video";
 
-      // Definir las rutas para los archivos en la carpeta "ytmp4"
-      rawMp4 = path.join(YTMP4_DIR, "video.mp4");
-      finalMp4 = path.join(YTMP4_DIR, "video_final.mp4");
+      rawMp4 = path.join(TMP_DIR, `${Date.now()}_raw.mp4`);
+      finalMp4 = path.join(TMP_DIR, `${Date.now()}_final.mp4`);
 
       // 🔍 BUSCAR SI NO ES LINK
       if (!/^https?:\/\//.test(query)) {
@@ -62,8 +59,7 @@ export default {
         if (!search.videos.length) {
           cooldowns.delete(userId);
           return sock.sendMessage(from, {
-            text: "❌ No se encontró el video",
-            ...global.channelInfo
+            text: "❌ No se encontró el video"
           });
         }
 
@@ -76,8 +72,7 @@ export default {
       }
 
       await sock.sendMessage(from, {
-        text: `🎬 *VIDEO*\n📹 ${title}\n⏳ Descargando…`,
-        ...global.channelInfo
+        text: `🎬 *VIDEO*\n📹 ${title}\n⏳ Descargando…`
       });
 
       // 🔥 LLAMADA API
@@ -132,8 +127,7 @@ export default {
         {
           video: fs.readFileSync(finalMp4),
           mimetype: "video/mp4",
-          caption: `🎬 ${title}`,
-          ...global.channelInfo
+          caption: `🎬 ${title}`
         },
         msg?.key ? { quoted: msg } : undefined
       );
@@ -143,18 +137,15 @@ export default {
       cooldowns.delete(userId);
 
       await sock.sendMessage(from, {
-        text: "❌ Error al procesar el video",
-        ...global.channelInfo
+        text: "❌ Error al procesar el video"
       });
 
     } finally {
-      // 🧹 LIMPIAR CARPETA YTMP4 DESPUÉS DE ENVIAR
+      // 🧹 LIMPIAR TMP
       try {
         if (rawMp4 && fs.existsSync(rawMp4)) fs.unlinkSync(rawMp4);
         if (finalMp4 && fs.existsSync(finalMp4)) fs.unlinkSync(finalMp4);
-      } catch (error) {
-        console.error("Error al eliminar archivos temporales:", error);
-      }
+      } catch {}
     }
   }
 };
