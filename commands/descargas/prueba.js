@@ -1,5 +1,5 @@
-import axios from 'axios';  // Necesitas instalar axios usando `npm install axios`
-import yts from 'yt-search';  // Necesitas instalar yt-search usando `npm install yt-search`
+import axios from 'axios';  // Asegúrate de tener axios instalado
+import yts from 'yt-search';  // Asegúrate de tener yt-search instalado
 import fs from 'fs';
 import path from 'path';
 
@@ -9,7 +9,7 @@ if (!fs.existsSync(TMP_DIR)) {
   fs.mkdirSync(TMP_DIR, { recursive: true });
 }
 
-const BASE_URL = 'https://api-sky.ultraplus.click'; // Base URL de la API
+const BASE_URL = 'https://api-sky.ultraplus.click';  // Base URL de la API
 
 export default {
   command: ['ytmp1'],
@@ -84,14 +84,21 @@ export default {
       const downloadUrl = BASE_URL + rel;
       console.log('Enlace de descarga:', downloadUrl);  // Depuración: Verificar el enlace de descarga completo
 
-      // 3) Descargar el archivo
+      // 3) Descargar el archivo con redirección y User-Agent
       const videoFilePath = path.join(TMP_DIR, 'video_360p.mp4');
       const writer = fs.createWriteStream(videoFilePath);
+
+      // Usamos un User-Agent de navegador para simular una solicitud real
+      const headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      };
 
       const videoRes = await axios({
         url: downloadUrl,  // Usamos la URL completa ahora
         method: 'GET',
-        responseType: 'stream',
+        headers: headers,  // Usamos el encabezado User-Agent
+        responseType: 'stream',  // Nos aseguramos de que la respuesta sea un stream
+        maxRedirects: 5  // Permitimos que siga hasta 5 redirecciones si es necesario
       });
 
       videoRes.data.pipe(writer);
