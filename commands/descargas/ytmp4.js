@@ -123,9 +123,11 @@ export default {
 
       // 🎞️ NORMALIZAR CON FFMPEG (IMPORTANTE PARA WHATSAPP)
       await new Promise((resolve, reject) => {
-        // Usamos la variable FFMPEG_TMP_DIR como directorio temporal para ffmpeg
+        // Usamos la variable de entorno TMPDIR para indicar el directorio temporal
+        process.env.TMPDIR = FFMPEG_TMP_DIR;
+
         exec(
-          `ffmpeg -y -loglevel error -i "${rawMp4}" -map 0:v -map 0:a? -movflags +faststart -c:v copy -c:a copy "${finalMp4}" -tmpdir "${FFMPEG_TMP_DIR}"`,
+          `ffmpeg -y -loglevel error -i "${rawMp4}" -map 0:v -map 0:a? -movflags +faststart -c:v copy -c:a copy "${finalMp4}"`,
           (err) => (err ? reject(err) : resolve())
         );
       });
