@@ -31,7 +31,8 @@ export default {
       const wait = cooldowns.get(userId) - Date.now();
       if (wait > 0) {
         return sock.sendMessage(from, {
-          text: `⏳ Espera ${Math.ceil(wait / 1000)}s`
+          text: `⏳ Espera ${Math.ceil(wait / 1000)}s`,
+          ...global.channelInfo
         });
       }
     }
@@ -41,7 +42,8 @@ export default {
       if (!args.length) {
         cooldowns.delete(userId);
         return sock.sendMessage(from, {
-          text: "❌ Escribe el nombre o link del video"
+          text: "❌ Escribe el nombre o link del video",
+          ...global.channelInfo
         });
       }
 
@@ -58,7 +60,8 @@ export default {
         if (!search.videos.length) {
           cooldowns.delete(userId);
           return sock.sendMessage(from, {
-            text: "❌ No se encontró el video"
+            text: "❌ No se encontró el video",
+            ...global.channelInfo
           });
         }
 
@@ -71,7 +74,8 @@ export default {
       }
 
       await sock.sendMessage(from, {
-        text: `🎬 *VIDEO*\n📹 ${title}\n⏳ Descargando…`
+        text: `🎬 *VIDEO*\n📹 ${title}\n⏳ Descargando…`,
+        ...global.channelInfo
       });
 
       // 🔥 LLAMADA API
@@ -126,7 +130,8 @@ export default {
         {
           video: fs.readFileSync(finalMp4),
           mimetype: "video/mp4",
-          caption: `🎬 ${title}`
+          caption: `🎬 ${title}`,
+          ...global.channelInfo
         },
         msg?.key ? { quoted: msg } : undefined
       );
@@ -136,7 +141,8 @@ export default {
       cooldowns.delete(userId);
 
       await sock.sendMessage(from, {
-        text: "❌ Error al procesar el video"
+        text: "❌ Error al procesar el video",
+        ...global.channelInfo
       });
 
     } finally {
