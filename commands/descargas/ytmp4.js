@@ -3,7 +3,6 @@ import path from "path";
 import axios from "axios";
 import yts from "yt-search";
 import { exec } from "child_process";
-import os from "os";  // Para obtener la ruta temporal del sistema operativo
 
 const API_URL = "https://nexevo-api.vercel.app/download/y2";
 const COOLDOWN_TIME = 15 * 1000;
@@ -12,16 +11,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const cooldowns = new Map();
 
 // Usamos la carpeta temporal del sistema (usualmente con más espacio disponible)
-const TMP_DIR = path.join(os.tmpdir(), "ytmp4"); // Usamos os.tmpdir() para obtener el directorio temporal del sistema
+const TMP_DIR = path.join(process.cwd(), "tmp");
 
 if (!fs.existsSync(TMP_DIR)) {
   fs.mkdirSync(TMP_DIR, { recursive: true });
-}
-
-// Directorio temporal personalizado para ffmpeg (cambiar a una ubicación con más espacio)
-const FFMPEG_TMP_DIR = path.join(os.tmpdir(), "ffmpeg_tmp");
-if (!fs.existsSync(FFMPEG_TMP_DIR)) {
-  fs.mkdirSync(FFMPEG_TMP_DIR, { recursive: true });
 }
 
 export default {
@@ -33,7 +26,7 @@ export default {
     const msg = ctx.m || ctx.msg || null;
 
     const userId = from;
-    let rawMp4, finalMp4;
+    let rawMp4;
 
     // 🔒 COOLDOWN
     if (cooldowns.has(userId)) {
@@ -59,7 +52,6 @@ export default {
       let title = "video";
 
       rawMp4 = path.join(TMP_DIR, `${Date.now()}_raw.mp4`);
-      finalMp4 = path.join(TMP_DIR, `${Date.now()}_final.mp4`);
 
       // 🔍 BUSCAR SI NO ES LINK
       if (!/^https?:\/\//.test(query)) {
@@ -121,22 +113,11 @@ export default {
 
       if (!ok) throw new Error("Fallo descarga");
 
-      // 🎞️ NORMALIZAR CON FFMPEG (IMPORTANTE PARA WHATSAPP)
-      await new Promise((resolve, reject) => {
-        // Usamos la variable de entorno TMPDIR para indicar el directorio temporal
-        process.env.TMPDIR = FFMPEG_TMP_DIR;
-
-        exec(
-          `ffmpeg -y -loglevel error -i "${rawMp4}" -map 0:v -map 0:a? -movflags +faststart -c:v copy -c:a copy "${finalMp4}"`,
-          (err) => (err ? reject(err) : resolve())
-        );
-      });
-
-      // 📤 ENVIAR
+      // 📤 ENVIAR EL VIDEO SIN CONVERSIÓN (sin usar ffmpeg)
       await sock.sendMessage(
         from,
         {
-          video: fs.readFileSync(finalMp4),
+          video: fs.readFileSync(rawMp4),
           mimetype: "video/mp4",
           caption: `🎬 ${title}`,
         },
@@ -155,7 +136,6 @@ export default {
       // 🧹 LIMPIAR TMP
       try {
         if (rawMp4 && fs.existsSync(rawMp4)) fs.unlinkSync(rawMp4);
-        if (finalMp4 && fs.existsSync(finalMp4)) fs.unlinkSync(finalMp4);
       } catch (err) {
         console.error("Error al limpiar los archivos temporales:", err);
       }
