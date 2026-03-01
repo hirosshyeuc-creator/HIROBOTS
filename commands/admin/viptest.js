@@ -1,4 +1,4 @@
-import { checkVipAndConsume } from "../../settings/vip-guard.js";
+import { checkVipAndConsume } from "./vip-guard.js";
 
 export default {
   name: "viptest",
