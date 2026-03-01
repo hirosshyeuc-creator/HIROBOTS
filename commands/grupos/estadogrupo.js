@@ -40,27 +40,24 @@ export default {
     const modoAdmiFile = path.join(DB_DIR, "modoadmi.json");
     const antilinkFile = path.join(DB_DIR, "antilink.json");
     const antispamFile = path.join(DB_DIR, "antispam.json");
-
-    // NUEVOS:
     const antiInsultosFile = path.join(DB_DIR, "antiinsultos_groups.json");
-    const anti18File = path.join(DB_DIR, "anti18_groups.json");
 
     const welcomeSet = readSetFromFile(welcomeFile);
     const modoAdmiSet = readSetFromFile(modoAdmiFile);
     const antilinkSet = readSetFromFile(antilinkFile);
     const antispamSet = readSetFromFile(antispamFile);
     const antiInsultosSet = readSetFromFile(antiInsultosFile);
-    const anti18Set = readSetFromFile(anti18File);
 
     const welcomeOn = welcomeSet.has(from);
     const modoAdmiOn = modoAdmiSet.has(from);
 
     const antilinkExists = fs.existsSync(antilinkFile);
-    const antilinkLabel = antilinkExists ? onOff(antilinkSet.has(from)) : "TEMP ♻️ (no guardado)";
+    const antilinkLabel = antilinkExists
+      ? onOff(antilinkSet.has(from))
+      : "TEMP ♻️ (no guardado)";
 
     const antispamOn = antispamSet.has(from);
     const antiInsultosOn = antiInsultosSet.has(from);
-    const anti18On = anti18Set.has(from);
 
     const caption =
       `🧩 *ESTADO DEL GRUPO*\n\n` +
@@ -68,15 +65,22 @@ export default {
       `• ModoAdmin: ${onOff(modoAdmiOn)}\n` +
       `• Antilink: ${antilinkLabel}\n` +
       `• Antispam: ${onOff(antispamOn)}\n` +
-      `• Anti-Insultos: ${onOff(antiInsultosOn)}\n` +
-      `• Anti +18: ${onOff(anti18On)}\n\n` +
+      `• Anti-Insultos: ${onOff(antiInsultosOn)}\n\n` +
       `👮 Solo admins pueden usar este comando.`;
 
     try {
       const ppUrl = await sock.profilePictureUrl(from, "image");
-      return sock.sendMessage(from, { image: { url: ppUrl }, caption, ...global.channelInfo }, { quoted: msg });
+      return sock.sendMessage(
+        from,
+        { image: { url: ppUrl }, caption, ...global.channelInfo },
+        { quoted: msg }
+      );
     } catch {
-      return sock.sendMessage(from, { text: caption, ...global.channelInfo }, { quoted: msg });
+      return sock.sendMessage(
+        from,
+        { text: caption, ...global.channelInfo },
+        { quoted: msg }
+      );
     }
   }
 };
