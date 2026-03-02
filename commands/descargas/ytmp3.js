@@ -87,6 +87,7 @@ export default {
       if (!args?.length) {
         cooldowns.delete(userId);
         return sock.sendMessage(from, {
+          text: "❌ Uso: .play <nombre o link>",
           text: "❌ Uso: .ytmp3 <nombre o link>",
           ...global.channelInfo,
         });
