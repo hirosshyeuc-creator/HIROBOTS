@@ -4,7 +4,6 @@ import axios from "axios";
 import yts from "yt-search";
 import { exec } from "child_process";
 
-// ✅ TU API (LEGAL) + APIKEY (hardcode si así lo quieres)
 const API_URL = "https://mayapi.ooguy.com/ytdl";
 const API_KEY = "may-5d597e52";
 
@@ -41,23 +40,19 @@ function withoutQuality(args) {
   return args.filter((a) => !/^\d{3,4}p$/i.test(a));
 }
 
-// ✅ Solo arma el request. Tu API debe responder con { status:true, result:{ url } }
+// ✅ API call
 async function fetchDirectMediaUrl({ videoUrl, quality }) {
   const { data } = await axios.get(API_URL, {
     timeout: 20000,
     params: {
       url: videoUrl,
-      quality,           // "360p"
-      apikey: API_KEY,   // ✅ hardcode
-      // type: "video"    // si tu API lo exige, descomenta
+      quality,
+      apikey: API_KEY,
     },
   });
 
   if (!data?.status || !data?.result?.url) throw new Error("API inválida");
-  return {
-    title: data?.result?.title || "video",
-    directUrl: data.result.url,
-  };
+  return { title: data?.result?.title || "video", directUrl: data.result.url };
 }
 
 async function downloadToFile(directUrl, outPath) {
@@ -108,6 +103,7 @@ export default {
     const userId = from;
     let rawMp4, finalMp4;
 
+    // Cooldown
     const until = cooldowns.get(userId);
     if (until && until > Date.now()) {
       return sock.sendMessage(from, {
@@ -123,10 +119,7 @@ export default {
       if (!args?.length) {
         cooldowns.delete(userId);
         return sock.sendMessage(from, {
-          text:
-            "❌ Uso:\n" +
-            "• .ytmp4 <nombre o link>\n" +
-            "• .ytmp4 360p <nombre o link>",
+          text: "❌ Uso: .ytmp4 (opcional 360p) <nombre o link>",
           ...global.channelInfo,
         });
       }
@@ -141,6 +134,7 @@ export default {
       rawMp4 = path.join(TMP_DIR, `${Date.now()}_raw.mp4`);
       finalMp4 = path.join(TMP_DIR, `${Date.now()}_final.mp4`);
 
+      // Buscar si no es link
       if (!isHttpUrl(query)) {
         const search = await yts(query);
         const first = search?.videos?.[0];
@@ -155,41 +149,47 @@ export default {
         title = safeFileName(first.title);
       }
 
-      await sock.sendMessage(
+      // ✅ 1 SOLO MENSAJE (sin spam)
+      const infoMsg = await sock.sendMessage(
         from,
         {
-          text:
-            `🎬 *VIDEO*\n` +
-            `📹 ${title}\n` +
-            `🎚️ Calidad: ${quality}\n` +
-            `⏳ Preparando…`,
+          text: `⬇️ Descargando…\n🎚️ ${quality}\n⏳ Por favor espera.`,
           ...global.channelInfo,
         },
         quoted
       );
 
-      // 🔥 API call
+      // API + descarga
       const info = await fetchDirectMediaUrl({ videoUrl, quality });
       title = safeFileName(info.title);
-      const directUrl = info.directUrl;
 
-      await sock.sendMessage(from, { text: "⬇️ Descargando…", ...global.channelInfo }, quoted);
-      await downloadToFile(directUrl, rawMp4);
-
-      await sock.sendMessage(from, { text: "🎞️ Optimizando (ffmpeg)…", ...global.channelInfo }, quoted);
+      await downloadToFile(info.directUrl, rawMp4);
       await ffmpegFaststart(rawMp4, finalMp4);
 
       const size = fs.existsSync(finalMp4) ? fs.statSync(finalMp4).size : 0;
       if (!size || size < 300000) throw new Error("Archivo final inválido");
       if (size > MAX_DOC_BYTES) throw new Error("Archivo demasiado grande para enviar.");
 
+      // (Opcional) intentar editar el mensaje (si tu lib lo soporta)
+      // Si no soporta, no pasa nada.
+      try {
+        if (infoMsg?.key) {
+          await sock.sendMessage(from, {
+            text: `📤 Enviando: ${title}…`,
+            edit: infoMsg.key,
+            ...global.channelInfo,
+          });
+        }
+      } catch {}
+
+      // Enviar video o documento
       if (size <= MAX_VIDEO_BYTES) {
         await sock.sendMessage(
           from,
           {
             video: { url: finalMp4 },
             mimetype: "video/mp4",
-            caption: `🎬 ${title}\n🎚️ ${quality}`,
+            caption: `🎬 ${title}`,
             ...global.channelInfo,
           },
           quoted
@@ -201,9 +201,7 @@ export default {
             document: { url: finalMp4 },
             mimetype: "video/mp4",
             fileName: `${title}.mp4`,
-            caption:
-              `📄 Video pesado. Enviado como documento.\n` +
-              `🎬 ${title}\n🎚️ ${quality}`,
+            caption: `📄 Enviado como documento.\n🎬 ${title}`,
             ...global.channelInfo,
           },
           quoted
