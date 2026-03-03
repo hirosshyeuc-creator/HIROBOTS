@@ -50,7 +50,14 @@ async function downloadToFile(url, filePath) {
     url,
     method: "GET",
     responseType: "stream",
-    headers: { "User-Agent": "Mozilla/5.0" }
+    maxRedirects: 5,
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+      "Accept": "*/*",
+      "Accept-Language": "es-ES,es;q=0.9",
+      "Referer": "https://www.youtube.com/",
+      "Connection": "keep-alive"
+    }
   });
 
   const writer = fs.createWriteStream(filePath);
@@ -60,6 +67,15 @@ async function downloadToFile(url, filePath) {
     writer.on("finish", resolve);
     writer.on("error", reject);
   });
+
+  // 🔎 Verificación anti-HTML
+  const buffer = fs.readFileSync(filePath);
+  const header = buffer.slice(0, 50).toString();
+
+  if (header.includes("<!DOCTYPE") || header.includes("<html")) {
+    fs.unlinkSync(filePath);
+    throw new Error("La API devolvió HTML en vez de video");
+  }
 }
 
 export default {
@@ -83,7 +99,9 @@ export default {
       if (!query.startsWith("http")) {
         const search = await searchVideo(query);
         if (!search) {
-          return sock.sendMessage(from, { text: "❌ No se encontró el video." });
+          return sock.sendMessage(from, {
+            text: "❌ No se encontró el video."
+          });
         }
         videoUrl = search.url;
         title = safeFileName(search.title);
@@ -94,7 +112,6 @@ export default {
       }, { quoted: m });
 
       const api = await getDirectUrl(videoUrl);
-
       title = safeFileName(title);
 
       if (api.thumbnail) {
@@ -110,19 +127,19 @@ export default {
 
       const size = fs.statSync(outFile).size;
 
-      if (size < 300000) {
-        throw new Error("Archivo inválido o incompleto");
+      if (size < 500000) {
+        throw new Error("Archivo demasiado pequeño, posible error de descarga");
       }
 
       if (size <= MAX_VIDEO_BYTES) {
         await sock.sendMessage(from, {
-          video: { url: outFile },
+          video: fs.readFileSync(outFile),
           mimetype: "video/mp4",
           caption: `🎬 ${title}\n📺 360p`
         }, { quoted: m });
       } else if (size <= MAX_DOC_BYTES) {
         await sock.sendMessage(from, {
-          document: { url: outFile },
+          document: fs.readFileSync(outFile),
           mimetype: "video/mp4",
           fileName: `${title}.mp4`,
           caption: `📄 ${title}\n📺 360p`
@@ -132,9 +149,9 @@ export default {
       }
 
     } catch (err) {
-      console.error("ERROR yt2:", err);
+      console.error("ERROR yt2:", err.message);
       await sock.sendMessage(from, {
-        text: "❌ Error al procesar el video."
+        text: "❌ Error al procesar el video.\n⚠ Puede que la API haya bloqueado la descarga."
       });
     } finally {
       if (outFile && fs.existsSync(outFile)) {
