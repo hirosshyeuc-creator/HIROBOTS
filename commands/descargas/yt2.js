@@ -2,20 +2,23 @@ import fs from "fs";
 import path from "path";
 import axios from "axios";
 import yts from "yt-search";
-import { execSync } from "child_process";
 
-const API_URL = "https://api.nexevodownloader.com/ytdl?url="; 
+const API_BASE = "https://nexevo.onrender.com/download/y2?url=";
 const TMP_DIR = path.join(process.cwd(), "tmp");
+
 const MAX_VIDEO_BYTES = 150 * 1024 * 1024;
+const MAX_DOC_BYTES = 2 * 1024 * 1024 * 1024;
 
 if (!fs.existsSync(TMP_DIR)) {
   fs.mkdirSync(TMP_DIR, { recursive: true });
 }
 
 function safeFileName(name) {
-  return (name || "video")
+  return (String(name || "video")
     .replace(/[\\/:*?"<>|]/g, "")
-    .slice(0, 80);
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80) || "video");
 }
 
 async function searchVideo(query) {
@@ -24,30 +27,25 @@ async function searchVideo(query) {
   return res.videos[0];
 }
 
-async function getDownloadUrl(url) {
-  const { data } = await axios.get(`${API_URL}${encodeURIComponent(url)}`, {
-    timeout: 30000
-  });
+async function getDirectUrl(videoUrl) {
+  const { data } = await axios.get(
+    API_BASE + encodeURIComponent(videoUrl),
+    { timeout: 30000 }
+  );
 
-  // Detectar automáticamente la URL dentro del JSON
-  const downloadUrl =
-    data?.url ||
-    data?.result?.url ||
-    data?.data?.url ||
-    data?.data?.download;
-
-  if (!downloadUrl) {
+  if (!data?.status || !data?.result?.url) {
     console.log("Respuesta API:", data);
-    throw new Error("API no devolvió enlace válido");
+    throw new Error("API no devolvió URL válida");
   }
 
   return {
-    title: data?.title || data?.result?.title || "video",
-    downloadUrl
+    url: data.result.url,
+    thumbnail: data.result.info?.thumbnail || null,
+    title: data.result.info?.title || "video"
   };
 }
 
-async function downloadFile(url, outputPath) {
+async function downloadToFile(url, filePath) {
   const response = await axios({
     url,
     method: "GET",
@@ -55,7 +53,7 @@ async function downloadFile(url, outputPath) {
     headers: { "User-Agent": "Mozilla/5.0" }
   });
 
-  const writer = fs.createWriteStream(outputPath);
+  const writer = fs.createWriteStream(filePath);
   response.data.pipe(writer);
 
   await new Promise((resolve, reject) => {
@@ -64,26 +62,9 @@ async function downloadFile(url, outputPath) {
   });
 }
 
-function convertToWhatsAppCompatible(inputPath) {
-  const outputPath = inputPath.replace(".mp4", "_fixed.mp4");
-
-  execSync(`ffmpeg -y -i "${inputPath}" \
-  -c:v libx264 \
-  -preset veryfast \
-  -profile:v baseline \
-  -level 3.0 \
-  -movflags +faststart \
-  -c:a aac \
-  -b:a 128k \
-  "${outputPath}"`);
-
-  fs.unlinkSync(inputPath);
-  return outputPath;
-}
-
 export default {
   command: ["yt2"],
-  category: "descargas",
+  category: "descarga",
 
   run: async ({ sock, from, args, m }) => {
     if (!args.length) {
@@ -92,14 +73,12 @@ export default {
       });
     }
 
+    let outFile = null;
+
     try {
       const query = args.join(" ");
       let videoUrl = query;
       let title = "video";
-
-      await sock.sendMessage(from, {
-        text: "🔎 Buscando y procesando video en 360p..."
-      }, { quoted: m });
 
       if (!query.startsWith("http")) {
         const search = await searchVideo(query);
@@ -110,39 +89,57 @@ export default {
         title = safeFileName(search.title);
       }
 
-      const apiData = await getDownloadUrl(videoUrl);
-      title = safeFileName(apiData.title);
+      await sock.sendMessage(from, {
+        text: "🔎 Descargando video en 360p..."
+      }, { quoted: m });
 
-      const tempPath = path.join(TMP_DIR, `${Date.now()}.mp4`);
+      const api = await getDirectUrl(videoUrl);
 
-      await downloadFile(apiData.downloadUrl, tempPath);
+      title = safeFileName(title);
 
-      const fixedPath = convertToWhatsAppCompatible(tempPath);
+      if (api.thumbnail) {
+        await sock.sendMessage(from, {
+          image: { url: api.thumbnail },
+          caption: `🎬 ${title}\n📺 Calidad: 360p\n⏳ Descargando...`
+        }, { quoted: m });
+      }
 
-      const size = fs.statSync(fixedPath).size;
+      outFile = path.join(TMP_DIR, `${Date.now()}.mp4`);
+
+      await downloadToFile(api.url, outFile);
+
+      const size = fs.statSync(outFile).size;
+
+      if (size < 300000) {
+        throw new Error("Archivo inválido o incompleto");
+      }
 
       if (size <= MAX_VIDEO_BYTES) {
         await sock.sendMessage(from, {
-          video: fs.readFileSync(fixedPath),
+          video: { url: outFile },
           mimetype: "video/mp4",
           caption: `🎬 ${title}\n📺 360p`
         }, { quoted: m });
-      } else {
+      } else if (size <= MAX_DOC_BYTES) {
         await sock.sendMessage(from, {
-          document: fs.readFileSync(fixedPath),
+          document: { url: outFile },
           mimetype: "video/mp4",
           fileName: `${title}.mp4`,
           caption: `📄 ${title}\n📺 360p`
         }, { quoted: m });
+      } else {
+        throw new Error("El archivo supera el límite permitido.");
       }
 
-      fs.unlinkSync(fixedPath);
-
     } catch (err) {
-      console.error("ERROR REAL:", err);
+      console.error("ERROR yt2:", err);
       await sock.sendMessage(from, {
         text: "❌ Error al procesar el video."
       });
+    } finally {
+      if (outFile && fs.existsSync(outFile)) {
+        fs.unlinkSync(outFile);
+      }
     }
   }
 };
