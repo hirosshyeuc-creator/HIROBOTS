@@ -1,81 +1,58 @@
-import axios from "axios"
-import yts from "yt-search"
+const express = require("express")
+const axios = require("axios")
 
-const API = "https://0f66da8bd81e5d32-201-230-121-168.serveousercontent.com/ytmp3"
+const app = express()
+const PORT = 3000
 
-export default {
-command: ["ytmp3yer"],
-category: "descarga",
+// endpoint para convertir youtube a mp3
+app.get("/play", async (req, res) => {
+try {
 
-run: async (ctx) => {
+const url = req.query.url
 
-const { sock, from, args } = ctx
-const msg = ctx.m || ctx.msg
-
-if (!args.length) {
-return sock.sendMessage(from,{
-text:"❌ Uso: .ytmp3yer canción"
-},{quoted:msg})
+if(!url){
+return res.json({
+status:false,
+message:"Falta la URL de YouTube"
+})
 }
 
-try{
+// codificar url para evitar errores
+const apiUrl = `https://0f66da8bd81e5d32-201-230-121-168.serveousercontent.com/ytmp3?url=${encodeURIComponent(url)}`
 
-const query = args.join(" ")
-
-const search = await yts(query)
-const video = search.videos[0]
-
-if(!video){
-return sock.sendMessage(from,{
-text:"❌ No encontré resultados"
-},{quoted:msg})
-}
-
-await sock.sendMessage(from,{
-image:{ url: video.thumbnail },
-caption:`🎵 Descargando...\n\n${video.title}`
-},{quoted:msg})
-
-/* pedir a tu API */
-
-const api = await axios.get(API,{
-params:{ url: video.url },
+// llamar a tu api
+const response = await axios.get(apiUrl,{
 timeout:20000
 })
 
-if(!api.data.status){
-throw "API error"
-}
+const data = response.data
 
-const downloadUrl = api.data.download
-
-/* descargar audio */
-
-const audio = await axios.get(downloadUrl,{
-responseType:"arraybuffer",
-headers:{
-"User-Agent":"Mozilla/5.0",
-"Referer":"https://www.youtube.com/"
-}
+if(!data || !data.download){
+return res.json({
+status:false,
+message:"La API no devolvió audio"
 })
+}
 
-/* enviar audio */
-
-await sock.sendMessage(from,{
-audio: audio.data,
-mimetype:"audio/webm",
-fileName: video.title + ".mp3"
-},{quoted:msg})
+// enviar resultado
+res.json({
+status:true,
+audio:data.download
+})
 
 }catch(err){
 
-console.log("ERROR YTMP3:",err)
+console.log(err.message)
 
-sock.sendMessage(from,{
-text:"❌ Error descargando el audio"
-},{quoted:msg})
+res.json({
+status:false,
+message:"Error al procesar el video"
+})
 
 }
 
-}
-}
+})
+
+app.listen(PORT,()=>{
+console.log("Servidor corriendo en puerto "+PORT)
+})
