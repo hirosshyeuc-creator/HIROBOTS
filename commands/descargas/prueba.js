@@ -1,152 +1,141 @@
+import fs from "fs";
+import path from "path";
+import axios from "axios";
+import yts from "yt-search";
+import { exec } from "child_process";
 
-import fs from "fs"
-import path from "path"
-import play from "play-dl"
-import { exec } from "child_process"
+const API_LIST = [
+"https://api.agatz.xyz/api/ytmp3",
+"https://api.neoxr.eu/api/youtube/audio"
+];
 
-const TMP_DIR = path.join(process.cwd(),"tmp")
+const TMP_DIR = path.join(process.cwd(),"tmp");
 
-const COOLDOWN_TIME = 10000
-const cooldowns = new Map()
-const locks = new Set()
-
-if (!fs.existsSync(TMP_DIR))
-fs.mkdirSync(TMP_DIR,{recursive:true})
+if(!fs.existsSync(TMP_DIR))
+fs.mkdirSync(TMP_DIR,{recursive:true});
 
 function safeFileName(name){
-return String(name || "audio")
+return String(name||"audio")
 .replace(/[\\/:*?"<>|]/g,"")
 .slice(0,80)
 }
 
-function convertToMp3(input,output){
+async function searchVideo(query){
+
+const res = await yts(query);
+
+if(!res.videos.length) return null;
+
+return res.videos[0];
+
+}
+
+async function getAudio(url){
+
+for(const api of API_LIST){
+
+try{
+
+const {data} = await axios.get(api,{
+params:{url}
+});
+
+if(data?.data?.url)
+return data.data.url;
+
+}catch{}
+
+}
+
+throw new Error("No se pudo obtener audio");
+
+}
+
+function convert(input,output){
+
 return new Promise((resolve,reject)=>{
 
-const cmd = `ffmpeg -y -i "${input}" -vn -ar 44100 -ac 2 -b:a 128k "${output}"`
+const cmd = `ffmpeg -y -i "${input}" -vn -ar 44100 -ac 2 -b:a 128k "${output}"`;
 
 exec(cmd,(err)=>{
-if(err) reject(err)
-else resolve()
-})
+if(err) reject(err);
+else resolve();
+});
 
-})
+});
+
 }
 
 export default {
 
-command:["play2","ytplay"],
+command:["play5"],
 category:"descarga",
 
-run: async (ctx)=>{
+run: async(ctx)=>{
 
-const { sock, from, args } = ctx
-const msg = ctx.m || ctx.msg
+const {sock,from,args} = ctx;
+const msg = ctx.m || ctx.msg;
 
-const userId = from
+if(!args.length)
+return sock.sendMessage(from,{text:"❌ Uso: .play canción"});
 
-if(locks.has(from)){
-return sock.sendMessage(from,{text:"⏳ Ya estoy descargando otra música."})
-}
-
-const until = cooldowns.get(userId)
-
-if(until && until > Date.now()){
-return sock.sendMessage(from,{
-text:`⏳ Espera ${Math.ceil((until-Date.now())/1000)}s`
-})
-}
-
-cooldowns.set(userId,Date.now()+COOLDOWN_TIME)
-
-let tempFile
-let finalMp3
+let tempFile;
+let finalFile;
 
 try{
 
-locks.add(from)
+const query = args.join(" ");
 
-if(!args?.length){
+const video = await searchVideo(query);
 
-cooldowns.delete(userId)
-
-return sock.sendMessage(from,{
-text:"❌ Uso: .play2 <nombre de canción>"
-})
-
-}
-
-const query = args.join(" ")
+if(!video)
+return sock.sendMessage(from,{text:"❌ No encontré resultados"});
 
 await sock.sendMessage(from,{
-text:"🔎 Buscando canción..."
-})
+image:{url:video.thumbnail},
+caption:`🎵 Descargando\n\n${video.title}`
+},{quoted:msg});
 
-const results = await play.search(query,{limit:1})
+const audioUrl = await getAudio(video.url);
 
-if(!results.length){
+tempFile = path.join(TMP_DIR,Date.now()+".mp4");
+finalFile = path.join(TMP_DIR,Date.now()+".mp3");
 
-cooldowns.delete(userId)
+const res = await axios({
+url:audioUrl,
+method:"GET",
+responseType:"stream"
+});
 
-return sock.sendMessage(from,{
-text:"❌ No se encontró la música."
-})
+const writer = fs.createWriteStream(tempFile);
 
-}
+res.data.pipe(writer);
 
-const video = results[0]
+await new Promise(r=>writer.on("finish",r));
 
-const title = safeFileName(video.title)
-
-await sock.sendMessage(from,{
-image:{url:video.thumbnails[0].url},
-caption:`🎵 Descargando...\n\n${title}`
-},{quoted:msg})
-
-const stream = await play.stream(video.url)
-
-tempFile = path.join(TMP_DIR,`${Date.now()}.webm`)
-finalMp3 = path.join(TMP_DIR,`${Date.now()}.mp3`)
-
-const write = fs.createWriteStream(tempFile)
-
-stream.stream.pipe(write)
-
-await new Promise(res=>write.on("finish",res))
-
-await convertToMp3(tempFile,finalMp3)
+await convert(tempFile,finalFile);
 
 await sock.sendMessage(from,{
-audio:{url:finalMp3},
+audio:{url:finalFile},
 mimetype:"audio/mpeg",
-fileName:`${title}.mp3`
-},{quoted:msg})
+fileName:safeFileName(video.title)+".mp3"
+},{quoted:msg});
 
-}catch(err){
+}catch(e){
 
-console.error("PLAY ERROR:",err)
+console.log("PLAY ERROR:",e);
 
-cooldowns.delete(userId)
-
-await sock.sendMessage(from,{
-text:"❌ Error al descargar la música."
-})
+sock.sendMessage(from,{
+text:"❌ Error al descargar música"
+});
 
 }finally{
 
-locks.delete(from)
-
-try{
-if(tempFile && fs.existsSync(tempFile))
-fs.unlinkSync(tempFile)
-}catch{}
-
-try{
-if(finalMp3 && fs.existsSync(finalMp3))
-fs.unlinkSync(finalMp3)
-}catch{}
+try{if(tempFile)fs.unlinkSync(tempFile)}catch{}
+try{if(finalFile)fs.unlinkSync(finalFile)}catch{}
 
 }
 
 }
 
-}
+};
