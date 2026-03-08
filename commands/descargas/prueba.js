@@ -5,32 +5,36 @@ export default {
 
 command: ["yt2"],
 
-async run(sock, m, args){
+async run({ sock, msg, from, args }) {
 
-try{
-
-const chat = m.key.remoteJid
+try {
 
 if(!args || args.length === 0){
-return sock.sendMessage(chat,{
-text:"❌ Escribe algo\nEjemplo:\nyt2 bad bunny"
+return sock.sendMessage(from,{
+text:"❌ Escribe algo\nEjemplo:\n.yt2 bad bunny"
 })
 }
 
 const query = args.join(" ")
 
-await sock.sendMessage(chat,{ text:"🔎 Buscando video..." })
+await sock.sendMessage(from,{
+text:"🔎 Buscando video..."
+})
 
 const search = await yts(query)
 const video = search.videos[0]
 
 if(!video){
-return sock.sendMessage(chat,{ text:"❌ No encontrado" })
+return sock.sendMessage(from,{
+text:"❌ No encontrado"
+})
 }
 
 const url = video.url
 
-await sock.sendMessage(chat,{ text:"⚡ Probando APIs..." })
+await sock.sendMessage(from,{
+text:"⚡ Probando APIs..."
+})
 
 const apis = [
 
@@ -91,19 +95,21 @@ continue
 }
 
 if(!download){
-return sock.sendMessage(chat,{ text:"❌ Ninguna API funcionó" })
+return sock.sendMessage(from,{
+text:"❌ Ninguna API funcionó"
+})
 }
 
-await sock.sendMessage(chat,{
-video:{ url: download },
+await sock.sendMessage(from,{
+video:{url:download},
 caption:`🎬 ${video.title}`
 })
 
 }catch(e){
 
-console.log("ERROR yt2:",e)
+console.error("ERROR yt2:",e)
 
-sock.sendMessage(m.key.remoteJid,{
+sock.sendMessage(from,{
 text:"❌ Error en descarga"
 })
 
