@@ -1,212 +1,37 @@
 import axios from "axios";
 import yts from "yt-search";
+import fs from "fs";
+import fsp from "fs/promises";
+import path from "path";
 
-const API_BASE = "https://dv-yer-api.online";
-const API_AUDIO_URL = `${API_BASE}/ytmp3`;
-const API_SEARCH_URL = `${API_BASE}/ytsearch`;
-
-const COOLDOWN_TIME = 10 * 1000;
-const AUDIO_QUALITY = "128k";
+// Configuración de la API (Solo Audio)
+const API_BASE = "https://dv-yer-api.online/ytmp3";
+const COOLDOWN = 8000;
 const cooldowns = new Map();
+const TMP_DIR = path.join(process.cwd(), "tmp");
+
+let busy = false;
+
+function wait(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function withGlobalLock(fn) {
+  while (busy) await wait(400);
+  busy = true;
+  try {
+    return await fn();
+  } finally {
+    busy = false;
+  }
+}
 
 function safeFileName(name) {
-  return (
-    String(name || "audio")
-      .replace(/[\\/:*?"<>|]/g, "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 80) || "audio"
-  );
-}
-
-function isHttpUrl(s) {
-  return /^https?:\/\//i.test(String(s || ""));
-}
-
-function getCooldownRemaining(untilMs) {
-  return Math.max(0, Math.ceil((untilMs - Date.now()) / 1000));
-}
-
-function getYoutubeId(url) {
-  try {
-    const u = new URL(url);
-    if (u.hostname.includes("youtu.be")) return u.pathname.replace("/", "").trim();
-    const v = u.searchParams.get("v");
-    if (v) return v.trim();
-
-    const parts = u.pathname.split("/").filter(Boolean);
-    const idxShorts = parts.indexOf("shorts");
-    if (idxShorts >= 0 && parts[idxShorts + 1]) return parts[idxShorts + 1].trim();
-
-    const idxEmbed = parts.indexOf("embed");
-    if (idxEmbed >= 0 && parts[idxEmbed + 1]) return parts[idxEmbed + 1].trim();
-
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function toAbsoluteUrl(urlLike) {
-  if (!urlLike) return "";
-  if (/^https?:\/\//i.test(urlLike)) return urlLike;
-  return new URL(urlLike, API_BASE).href;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function pickBestDownloadUrl(data) {
-  return (
-    data?.download_url_full ||
-    data?.download_url ||
-    data?.url ||
-    data?.result?.download_url_full ||
-    data?.result?.download_url ||
-    data?.result?.url ||
-    ""
-  );
-}
-
-function pickTitle(data, fallback = "audio") {
-  return data?.title || data?.result?.title || fallback;
-}
-
-function extractApiError(data, status) {
-  return (
-    data?.detail ||
-    data?.error?.message ||
-    data?.message ||
-    (status ? `HTTP ${status}` : "Error de API")
-  );
-}
-
-async function apiGet(url, params, timeout = 35000) {
-  const response = await axios.get(url, {
-    timeout,
-    params,
-    validateStatus: () => true,
-  });
-
-  const data = response.data;
-
-  if (response.status >= 400) {
-    throw new Error(extractApiError(data, response.status));
-  }
-
-  if (data?.ok === false || data?.status === false) {
-    throw new Error(extractApiError(data, response.status));
-  }
-
-  return data;
-}
-
-async function resolveVideoInfo(queryOrUrl) {
-  if (!isHttpUrl(queryOrUrl)) {
-    try {
-      const data = await apiGet(API_SEARCH_URL, { q: queryOrUrl, limit: 1 }, 25000);
-      const first = data?.results?.[0];
-      if (first?.url) {
-        return {
-          videoUrl: first.url,
-          title: safeFileName(first.title),
-          thumbnail: first.thumbnail || null,
-        };
-      }
-    } catch {}
-
-    const search = await yts(queryOrUrl);
-    const first = search?.videos?.[0];
-    if (!first) return null;
-
-    return {
-      videoUrl: first.url,
-      title: safeFileName(first.title),
-      thumbnail: first.thumbnail || null,
-    };
-  }
-
-  const videoId = getYoutubeId(queryOrUrl);
-  if (videoId) {
-    try {
-      const info = await yts({ videoId });
-      if (info?.url) {
-        return {
-          videoUrl: info.url,
-          title: safeFileName(info.title),
-          thumbnail: info.thumbnail || null,
-        };
-      }
-    } catch {}
-  }
-
-  return {
-    videoUrl: queryOrUrl,
-    title: "audio",
-    thumbnail: null,
-  };
-}
-
-async function requestAudioLink(videoUrl) {
-  let lastError = "No se pudo obtener el audio.";
-
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      const data = await apiGet(API_AUDIO_URL, {
-        mode: "link",
-        quality: AUDIO_QUALITY,
-        url: videoUrl,
-      });
-
-      const directUrl = toAbsoluteUrl(pickBestDownloadUrl(data));
-      if (!directUrl) {
-        throw new Error("La API no devolvió URL de descarga.");
-      }
-
-      return {
-        title: pickTitle(data, "audio"),
-        directUrl,
-      };
-    } catch (error) {
-      lastError = error?.message || "Error desconocido";
-      await sleep(900 * attempt);
-    }
-  }
-
-  throw new Error(lastError);
-}
-
-async function sendAudioByUrl(sock, from, quoted, { directUrl, title }) {
-  try {
-    await sock.sendMessage(
-      from,
-      {
-        audio: { url: directUrl },
-        mimetype: "audio/mpeg",
-        ptt: false,
-        fileName: `${title}.mp3`,
-        ...global.channelInfo,
-      },
-      quoted
-    );
-    return "audio";
-  } catch (e1) {
-    console.error("send audio by url failed:", e1?.message || e1);
-
-    await sock.sendMessage(
-      from,
-      {
-        document: { url: directUrl },
-        mimetype: "audio/mpeg",
-        fileName: `${title}.mp3`,
-        caption: `🎵 ${title}`,
-        ...global.channelInfo,
-      },
-      quoted
-    );
-    return "document";
-  }
+  return String(name || "audio")
+    .replace(/[\\/:*?"<>|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60);
 }
 
 export default {
@@ -216,72 +41,133 @@ export default {
   run: async (ctx) => {
     const { sock, from, args } = ctx;
     const msg = ctx.m || ctx.msg || null;
-    const userId = from;
-    const quoted = msg?.key ? { quoted: msg } : undefined;
+    const messageKey = msg?.key || null;
 
-    const until = cooldowns.get(userId);
-    if (until && until > Date.now()) {
-      return sock.sendMessage(from, {
-        text: `⏳ Espera ${getCooldownRemaining(until)}s`,
-        ...global.channelInfo,
-      });
+    const now = Date.now();
+    const userCooldown = cooldowns.get(from);
+
+    if (userCooldown && now < userCooldown) {
+      return sock.sendMessage(
+        from,
+        { text: `⏳ Espera ${Math.ceil((userCooldown - now) / 1000)}s`, ...global.channelInfo },
+        msg ? { quoted: msg } : undefined
+      );
     }
 
-    cooldowns.set(userId, Date.now() + COOLDOWN_TIME);
+    cooldowns.set(from, now + COOLDOWN);
 
     try {
       if (!args?.length) {
-        cooldowns.delete(userId);
-        return sock.sendMessage(from, {
-          text: "❌ Uso: .ytmp3 <nombre o link>",
-          ...global.channelInfo,
-        });
+        cooldowns.delete(from);
+        return sock.sendMessage(
+          from,
+          { text: "🎧 Uso: .ytmp3 <nombre o link>", ...global.channelInfo },
+          msg ? { quoted: msg } : undefined
+        );
       }
 
-      const query = args.join(" ").trim();
-      const meta = await resolveVideoInfo(query);
-
-      if (!meta) {
-        cooldowns.delete(userId);
-        return sock.sendMessage(from, {
-          text: "❌ No se encontró ningún resultado.",
-          ...global.channelInfo,
-        });
+      if (messageKey) {
+        await sock.sendMessage(from, { react: { text: "⏳", key: messageKey } });
       }
 
-      let { videoUrl, title, thumbnail } = meta;
+      let query = args.join(" ").trim();
+      let videoUrl = query;
+      let title = "YouTube Audio";
+      let thumbnail = "";
+      let duration = "??";
+
+      // Búsqueda en YouTube si no es un link directo
+      if (!/^https?:\/\//i.test(query)) {
+        const { videos } = await yts(query);
+        if (!videos?.length) throw new Error("Sin resultados");
+        const v = videos.find((x) => x.seconds && x.seconds < 1800) || videos[0];
+        videoUrl = v.url;
+        title = v.title;
+        thumbnail = v.thumbnail;
+        duration = v.timestamp;
+      }
+
+      // Mensaje de "Descargando..."
+      await sock.sendMessage(
+        from,
+        {
+          text: `🎧 *Descargando Audio...*\n\n🎵 ${title}\n⏱ ${duration}`,
+          contextInfo: {
+            externalAdReply: {
+              title: title,
+              body: `⏱ Duración: ${duration}`,
+              thumbnailUrl: thumbnail,
+              sourceUrl: videoUrl,
+              mediaType: 1,
+              renderLargerThumbnail: true,
+              showAdAttribution: false
+            }
+          },
+          ...global.channelInfo
+        },
+        msg ? { quoted: msg } : undefined
+      );
+
+      // Petición a la API con los parámetros que indicaste
+      const apiRes = await axios.get(API_BASE, {
+        params: {
+          mode: "link",
+          quality: "128k",
+          url: videoUrl
+        },
+        timeout: 35000
+      });
+
+      const data = apiRes.data;
+      
+      // Usamos 'download_url_full' según el JSON de ejemplo
+      const audioUrl = data?.download_url_full;
+
+      if (!data?.ok || !audioUrl) {
+        throw new Error("La API no proporcionó un enlace de descarga.");
+      }
+
+      // Enviar el audio final
+      await withGlobalLock(async () => {
+        await sock.sendMessage(
+          from,
+          {
+            audio: { url: audioUrl },
+            mimetype: "audio/mpeg",
+            fileName: `${safeFileName(title)}.mp3`,
+            contextInfo: {
+              externalAdReply: {
+                title: title,
+                body: `⏱ ${duration}`,
+                thumbnailUrl: thumbnail,
+                sourceUrl: videoUrl,
+                mediaType: 1,
+                renderLargerThumbnail: true
+              }
+            },
+            ...global.channelInfo
+          },
+          msg ? { quoted: msg } : undefined
+        );
+      });
+
+      if (messageKey) {
+        await sock.sendMessage(from, { react: { text: "✅", key: messageKey } });
+      }
+
+    } catch (err) {
+      cooldowns.delete(from);
+      console.error("❌ YTMP3 ERROR:", err?.message || err);
+
+      if (messageKey) {
+        try { await sock.sendMessage(from, { react: { text: "❌", key: messageKey } }); } catch {}
+      }
 
       await sock.sendMessage(
         from,
-        thumbnail
-          ? {
-              image: { url: thumbnail },
-              caption: `🎵 Preparando audio...\n\n🎧 ${title}\n🎚️ Calidad: ${AUDIO_QUALITY}`,
-              ...global.channelInfo,
-            }
-          : {
-              text: `🎵 Preparando audio...\n\n🎧 ${title}\n🎚️ Calidad: ${AUDIO_QUALITY}`,
-              ...global.channelInfo,
-            },
-        quoted
+        { text: "❌ Error: No se pudo procesar la descarga.", ...global.channelInfo },
+        msg ? { quoted: msg } : undefined
       );
-
-      const info = await requestAudioLink(videoUrl);
-      title = safeFileName(info.title || title);
-
-      await sendAudioByUrl(sock, from, quoted, {
-        directUrl: info.directUrl,
-        title,
-      });
-    } catch (err) {
-      console.error("YTMP3 ERROR:", err?.message || err);
-      cooldowns.delete(userId);
-
-      await sock.sendMessage(from, {
-        text: `❌ ${String(err?.message || "Error al procesar la música.")}`,
-        ...global.channelInfo,
-      });
     }
   },
 };
-
