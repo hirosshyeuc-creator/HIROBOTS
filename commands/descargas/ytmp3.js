@@ -7,7 +7,6 @@ import { exec } from "child_process";
 const API_BASE = "https://dv-yer-api.online/ytmp3";
 const TMP_DIR = path.join(process.cwd(), "tmp");
 
-// Asegurar que la carpeta temporal exista
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR);
 
 export default {
@@ -19,9 +18,9 @@ export default {
     const msg = ctx.m || ctx.msg || null;
     const messageKey = msg?.key || null;
     
-    // Generar nombre de archivo único para evitar conflictos
-    const fileName = `audio_${Date.now()}.mp3`;
-    const outputPath = path.join(TMP_DIR, fileName);
+    const id = Date.now();
+    const rawPath = path.join(TMP_DIR, `raw_${id}.m4a`);
+    const mp3Path = path.join(TMP_DIR, `final_${id}.mp3`);
 
     try {
       if (!args?.length) return;
@@ -34,7 +33,6 @@ export default {
         videoUrl = videos[0].url;
       }
 
-      // 1. Obtener URL de la API
       const apiRes = await axios.get(API_BASE, {
         params: { mode: "link", quality: "128k", url: videoUrl }
       });
@@ -42,32 +40,39 @@ export default {
       const streamUrl = apiRes.data?.download_url_full;
       if (!streamUrl) throw new Error("API no respondió.");
 
-      // 2. Descargar y convertir usando ffmpeg directamente al archivo local
+      // 1. Descargamos el archivo original (M4A)
+      const writer = fs.createWriteStream(rawPath);
+      const response = await axios({ url: streamUrl, method: 'GET', responseType: 'stream' });
+      response.data.pipe(writer);
+
       await new Promise((resolve, reject) => {
-        // Comando ffmpeg que descarga de la URL y guarda en el archivo temporal
-        const cmd = `ffmpeg -i "${streamUrl}" -vn -acodec libmp3lame -q:a 2 "${outputPath}"`;
-        exec(cmd, (error) => {
-          if (error) reject(error);
-          else resolve();
-        });
+        writer.on('finish', resolve);
+        writer.on('error', reject);
       });
 
-      // 3. Enviar el archivo físico desde el servidor a WhatsApp
+      // 2. CONVERSIÓN FORZADA con FFMPEG a MP3 (Esto limpia el contenedor M4A)
+      await new Promise((resolve, reject) => {
+        const cmd = `ffmpeg -i "${rawPath}" -acodec libmp3lame -ab 128k -ar 44100 -y "${mp3Path}"`;
+        exec(cmd, (err) => err ? reject(err) : resolve());
+      });
+
+      // 3. Enviamos el archivo MP3 ya convertido
       await sock.sendMessage(from, {
-        audio: { url: outputPath },
+        audio: { url: mp3Path },
         mimetype: "audio/mpeg",
-        ptt: true, // Nota de voz
+        ptt: true,
         fileName: "audio.mp3"
       }, { quoted: msg });
 
       if (messageKey) await sock.sendMessage(from, { react: { text: "✅", key: messageKey } });
 
     } catch (err) {
-      console.error("❌ ERROR:", err);
+      console.error("❌ ERROR FFMPEG/M4A:", err);
       if (messageKey) await sock.sendMessage(from, { react: { text: "❌", key: messageKey } });
     } finally {
-      // 4. Limpiar archivo temporal
-      if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+      // 4. LIMPIEZA: Borramos los archivos temporales
+      if (fs.existsSync(rawPath)) fs.unlinkSync(rawPath);
+      if (fs.existsSync(mp3Path)) fs.unlinkSync(mp3Path);
     }
   },
 };
