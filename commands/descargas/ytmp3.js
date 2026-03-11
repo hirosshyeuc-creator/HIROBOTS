@@ -11,7 +11,7 @@ const API_SEARCH_URL = `${API_BASE}/ytsearch`;
 const COOLDOWN_TIME = 15 * 1000;
 const AUDIO_QUALITY = "128k";
 const REQUEST_TIMEOUT = 120000;
-const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
+const MAX_AUDIO_BYTES = 800 * 1024 * 1024;
 const TMP_DIR = path.join(process.cwd(), "tmp");
 
 const cooldowns = new Map();
