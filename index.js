@@ -849,6 +849,20 @@ function shouldPromptInConsole(botState) {
   return botState?.config?.id === "main";
 }
 
+function shouldAutoRequestPairingCode(botState) {
+  return botState?.config?.id === "main";
+}
+
+function getMainBotState() {
+  return botStates.get("main") || null;
+}
+
+function isMainBotReady() {
+  const mainBotState = getMainBotState();
+  if (!mainBotState) return false;
+  return Boolean(isBotRegistered(mainBotState) || mainBotState?.sock?.user?.id);
+}
+
 async function ensureBotSocket(botState) {
   if (botState?.sock) return botState.sock;
 
@@ -876,6 +890,14 @@ async function requestPairingCode(botState, options = {}) {
     };
   }
 
+  if (botState.config?.id !== "main" && !isMainBotReady()) {
+    return {
+      ok: false,
+      status: "main_not_ready",
+      message: "Primero vincula y conecta el bot principal desde la consola.",
+    };
+  }
+
   if (isBotRegistered(botState)) {
     return {
       ok: false,
@@ -884,8 +906,14 @@ async function requestPairingCode(botState, options = {}) {
     };
   }
 
-  const cached = useCache ? getCachedPairingCode(botState) : null;
-  if (cached) {
+  const explicitNumber = sanitizePhoneNumber(number);
+  const cached = getCachedPairingCode(botState);
+  const shouldForceRefresh =
+    useCache === false ||
+    (explicitNumber &&
+      explicitNumber !== sanitizePhoneNumber(cached?.number || ""));
+
+  if (cached && !shouldForceRefresh) {
     return {
       ok: true,
       status: "cached",
@@ -898,8 +926,12 @@ async function requestPairingCode(botState, options = {}) {
     };
   }
 
+  if (cached && shouldForceRefresh) {
+    resetPairingCache(botState);
+  }
+
   let resolvedNumber =
-    sanitizePhoneNumber(number) || sanitizePhoneNumber(botState.config?.pairingNumber);
+    explicitNumber || sanitizePhoneNumber(botState.config?.pairingNumber);
 
   if (!resolvedNumber && allowPrompt) {
     console.log(`${getBotTag(botState)} Bot no vinculado`);
@@ -920,7 +952,7 @@ async function requestPairingCode(botState, options = {}) {
     };
   }
 
-  if (botState.pairingRequested) {
+  if (botState.pairingRequested && !botState.lastPairingCode) {
     return {
       ok: false,
       status: "pending",
@@ -968,6 +1000,13 @@ async function requestPairingCode(botState, options = {}) {
       message: err?.message || "No pude obtener el codigo de vinculacion.",
       error: err,
     };
+  }
+}
+
+async function startSecondaryBots() {
+  for (const config of BOT_CONFIGS) {
+    if (config.id === "main") continue;
+    await iniciarInstanciaBot(config);
   }
 }
 
@@ -1028,6 +1067,7 @@ global.botRuntime = {
       useCache: options?.useCache !== false,
     });
   },
+  isMainReady: () => isMainBotReady(),
   listBots: (options = {}) => {
     const includeMain = options?.includeMain === true;
     const onlyConnected = options?.onlyConnected === true;
@@ -1181,7 +1221,12 @@ async function iniciarInstanciaBot(config) {
 
     sock.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
       try {
-        if (qr && !isBotRegistered(botState) && !botState.pairingRequested) {
+        if (
+          qr &&
+          shouldAutoRequestPairingCode(botState) &&
+          !isBotRegistered(botState) &&
+          !botState.pairingRequested
+        ) {
           await requestPairingCodeSafe(botState);
         }
 
@@ -1202,6 +1247,10 @@ async function iniciarInstanciaBot(config) {
           console.log(
             chalk.green(`${getBotTag(botState)} ${config.displayName} conectado`)
           );
+
+          if (botState.config?.id === "main") {
+            await startSecondaryBots();
+          }
         }
 
         if (connection === "close") {
@@ -1247,8 +1296,13 @@ async function start() {
   await cargarComandos();
   banner();
 
-  for (const config of BOT_CONFIGS) {
-    await iniciarInstanciaBot(config);
+  const mainConfig = BOT_CONFIGS.find((config) => config.id === "main");
+  if (mainConfig) {
+    await iniciarInstanciaBot(mainConfig);
+  }
+
+  if (isMainBotReady()) {
+    await startSecondaryBots();
   }
 }
 

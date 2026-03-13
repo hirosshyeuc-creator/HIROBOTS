@@ -260,6 +260,7 @@ export default {
 
     const result = await runtime.requestBotPairingCode("subbot", {
       number: requestedNumber,
+      useCache: !requestedNumber,
     });
 
     if (!result?.ok) {
@@ -268,6 +269,8 @@ export default {
       if (result?.status === "missing_bot") {
         text =
           "El subbot no esta activo en este momento. Revisa que `subbot.enabled` siga en true.";
+      } else if (result?.status === "main_not_ready") {
+        text = "Primero vincula y conecta el bot principal desde la consola.";
       } else if (result?.status === "already_linked") {
         text = `El subbot ya esta vinculado y funcionando.\nEn este chat: ${chatStatus}`;
       } else if (result?.status === "pending") {
