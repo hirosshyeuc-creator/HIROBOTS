@@ -1,35 +1,30 @@
 import fs from "fs";
+import os from "os";
 import path from "path";
 
-const BOX_INNER_WIDTH = 54;
-
-function formatUptime(seconds) {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  return `${h}h ${m}m`;
-}
+const BOX_WIDTH = 56;
 
 function repeat(char, count) {
   return char.repeat(Math.max(0, count));
 }
 
 function border(char = "=") {
-  return `+${repeat(char, BOX_INNER_WIDTH + 2)}+`;
+  return `+${repeat(char, BOX_WIDTH + 2)}+`;
 }
 
 function padLine(content = "") {
-  return `| ${String(content).padEnd(BOX_INNER_WIDTH)} |`;
+  return `| ${String(content).padEnd(BOX_WIDTH)} |`;
 }
 
 function centerLine(content = "") {
-  const text = String(content);
-  const totalPadding = Math.max(0, BOX_INNER_WIDTH - text.length);
+  const text = String(content || "");
+  const totalPadding = Math.max(0, BOX_WIDTH - text.length);
   const left = Math.floor(totalPadding / 2);
   const right = totalPadding - left;
   return `|${repeat(" ", left + 1)}${text}${repeat(" ", right + 1)}|`;
 }
 
-function wrapText(text, width = BOX_INNER_WIDTH) {
+function wrapText(text, width = BOX_WIDTH) {
   const source = String(text || "").trim();
   if (!source) return [""];
 
@@ -61,22 +56,38 @@ function wrapText(text, width = BOX_INNER_WIDTH) {
     }
   }
 
-  if (current) {
-    lines.push(current);
-  }
-
+  if (current) lines.push(current);
   return lines.length ? lines : [""];
 }
 
 function buildWrappedLines(text, options = {}) {
-  const width = options.width || BOX_INNER_WIDTH;
   const prefix = String(options.prefix || "");
   const continuation = String(options.continuation || repeat(" ", prefix.length));
-  const lines = wrapText(text, Math.max(10, width - prefix.length));
+  const width = Math.max(10, BOX_WIDTH - prefix.length);
+  const lines = wrapText(text, width);
 
   return lines.map((line, index) =>
     padLine(`${index === 0 ? prefix : continuation}${line}`)
   );
+}
+
+function formatUptime(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds || 0)));
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+
+  if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(2)} GB`;
+  if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${value} B`;
 }
 
 function getPrefix(settings) {
@@ -87,21 +98,14 @@ function getPrefix(settings) {
   return String(settings?.prefix || ".").trim() || ".";
 }
 
-function getCategoryLabel(category) {
-  const labels = {
-    admin: "ADMIN",
-    ai: "AI",
-    busqueda: "BUSQUEDA",
-    descarga: "DESCARGAS",
-    grupo: "GRUPOS",
-    media: "MEDIA",
-    menu: "MENU",
-    sistema: "SISTEMA",
-    subbots: "SUBBOTS",
-    vip: "VIP",
-  };
-
-  return labels[String(category || "").toLowerCase()] || String(category || "").toUpperCase();
+function getRuntimeMode() {
+  if (process.env.pm_id || process.env.PM2_HOME) return "PM2 / VPS";
+  if (process.env.RAILWAY_ENVIRONMENT) return "Railway";
+  if (process.env.RENDER) return "Render";
+  if (process.env.PTERODACTYL_SERVER_UUID || process.env.SERVER_ID) return "Pterodactyl";
+  if (process.env.KOYEB_SERVICE_NAME) return "Koyeb";
+  if (process.env.DYNO) return "Heroku";
+  return "Node directo";
 }
 
 function buildCategoryMap(comandos) {
@@ -130,31 +134,6 @@ function buildCategoryMap(comandos) {
   return categories;
 }
 
-function sortCategories(categories) {
-  const preferredOrder = [
-    "menu",
-    "subbots",
-    "descarga",
-    "busqueda",
-    "grupo",
-    "admin",
-    "sistema",
-    "media",
-    "ai",
-    "vip",
-  ];
-
-  return Array.from(categories.keys()).sort((a, b) => {
-    const aIndex = preferredOrder.indexOf(a);
-    const bIndex = preferredOrder.indexOf(b);
-
-    if (aIndex === -1 && bIndex === -1) return a.localeCompare(b);
-    if (aIndex === -1) return 1;
-    if (bIndex === -1) return -1;
-    return aIndex - bIndex;
-  });
-}
-
 function countCommands(categories) {
   return Array.from(categories.values()).reduce(
     (total, items) => total + items.length,
@@ -162,121 +141,196 @@ function countCommands(categories) {
   );
 }
 
-function renderStandardCategory(category, items, prefix) {
-  const title = `${getCategoryLabel(category)} :: ${items.length} comandos`;
-  const lines = [];
+function sortCategories(categories) {
+  const preferred = [
+    "subbots",
+    "sistema",
+    "descarga",
+    "busqueda",
+    "grupo",
+    "admin",
+    "media",
+    "ai",
+    "vip",
+    "menu",
+  ];
 
-  for (const item of items) {
-    lines.push(...buildWrappedLines(`\`${prefix}${item.command}\``, { prefix: "- " }));
-  }
+  return Array.from(categories.keys()).sort((a, b) => {
+    const ai = preferred.indexOf(a);
+    const bi = preferred.indexOf(b);
 
-  return [
-    border("-"),
-    centerLine(title),
-    border("-"),
-    ...lines,
-    border("-"),
-  ].join("\n");
+    if (ai === -1 && bi === -1) return a.localeCompare(b);
+    if (ai === -1) return 1;
+    if (bi === -1) return -1;
+    return ai - bi;
+  });
+}
+
+function getCategoryLabel(category) {
+  const labels = {
+    admin: "ADMIN",
+    ai: "AI",
+    busqueda: "BUSQUEDA",
+    descarga: "DESCARGAS",
+    grupo: "GRUPOS",
+    media: "MEDIA",
+    menu: "MENU",
+    sistema: "SISTEMA",
+    subbots: "SUBBOTS",
+    vip: "VIP",
+  };
+
+  return labels[String(category || "").toLowerCase()] || String(category || "").toUpperCase();
 }
 
 function getSubbotStats() {
   const runtime = global.botRuntime;
-  if (!runtime?.getSubbotRequestState) {
+  if (!runtime?.getSubbotRequestState || !runtime?.listBots) {
     return {
-      publicRequests: false,
       maxSlots: 15,
       availableSlots: 0,
       activeSlots: 0,
       enabledSlots: 0,
+      publicRequests: false,
+      botCount: 0,
+      connectedCount: 0,
     };
   }
 
-  return runtime.getSubbotRequestState();
-}
+  const state = runtime.getSubbotRequestState() || {};
+  const bots = runtime.listBots({ includeMain: true }) || [];
 
-function renderSubbotsCategory(items, prefix) {
-  const stats = getSubbotStats();
-  const preferredOrder = ["subbot", "subbots", "subboton", "subbotoff"];
-  const labels = {
-    subbot: "pide un codigo nuevo para vincular otro bot",
-    subbots: "mira slots, tiempos y subbots activos",
-    subboton: "abre el acceso publico para que todos pidan subbots",
-    subbotoff: "cierra el acceso publico cuando quieras pausar",
+  return {
+    maxSlots: Number(state.maxSlots || 15),
+    availableSlots: Number(state.availableSlots || 0),
+    activeSlots: Number(state.activeSlots || 0),
+    enabledSlots: Number(state.enabledSlots || 0),
+    publicRequests: Boolean(state.publicRequests),
+    botCount: bots.length,
+    connectedCount: bots.filter((bot) => bot.connected).length,
   };
-  const itemMap = new Map(items.map((item) => [item.command, item]));
-  const orderedItems = [
-    ...preferredOrder
-      .filter((command) => itemMap.has(command))
-      .map((command) => itemMap.get(command)),
-    ...items.filter((item) => !preferredOrder.includes(item.command)),
-  ];
-  const modeLabel = stats.publicRequests ? "ENCENDIDO" : "APAGADO";
-  const lines = [
-    padLine(
-      `Slots ${stats.maxSlots} | libres ${stats.availableSlots} | activos ${stats.activeSlots}`
-    ),
-    padLine(`Modo publico ${modeLabel} | reservados ${stats.enabledSlots}`),
-    padLine(""),
-  ];
-
-  orderedItems.forEach((item, index) => {
-    const title = `${String(index + 1).padStart(2, "0")}. \`${prefix}${item.command}\``;
-    const description = labels[item.command] || item.description || "control de subbots";
-    lines.push(...buildWrappedLines(title, { prefix: "> " }));
-    lines.push(...buildWrappedLines(description, { prefix: "  " }));
-  });
-
-  lines.push(padLine(""));
-  lines.push(
-    ...buildWrappedLines(`Rapido: \`${prefix}subbot 519xxxxxxxxx\``, {
-      prefix: "* ",
-    })
-  );
-  lines.push(
-    ...buildWrappedLines(`Fijo: \`${prefix}subbot 3 519xxxxxxxxx\``, {
-      prefix: "* ",
-    })
-  );
-  lines.push(
-    ...buildWrappedLines(`Panel: \`${prefix}subbots\``, {
-      prefix: "* ",
-    })
-  );
-
-  return [
-    border("="),
-    centerLine("SUBBOTS CONTROL"),
-    centerLine("crea, vigila y administra tus slots"),
-    border("="),
-    ...lines,
-    border("="),
-  ].join("\n");
 }
 
 function buildHeader(settings, categories, prefix) {
-  const totalCommands = countCommands(categories);
-  const totalCategories = categories.size;
+  const subbots = getSubbotStats();
 
   return [
     border("="),
-    centerLine(String(settings.botName || "BOT")),
-    centerLine("menu principal"),
+    centerLine(`${String(settings.botName || "BOT")} // CONTROL HUB`),
+    centerLine("menu principal del bot"),
     border("="),
-    padLine(`Prefijo   : ${prefix}`),
-    padLine("Estado    : online"),
-    padLine(`Uptime    : ${formatUptime(process.uptime())}`),
-    padLine(`Categorias: ${totalCategories}`),
-    padLine(`Comandos  : ${totalCommands}`),
-    border("="),
-    centerLine("MENU DE COMANDOS"),
+    padLine(`Prefijo: ${prefix}`),
+    padLine(`Uptime: ${formatUptime(process.uptime())} | Entorno: ${getRuntimeMode()}`),
+    padLine(`Categorias: ${categories.size} | Comandos: ${countCommands(categories)}`),
+    padLine(`Bots online: ${subbots.connectedCount}/${subbots.botCount}`),
     border("="),
   ];
 }
 
-function buildFooter() {
+function renderFeatureSection(title, subtitle, stats = [], items = []) {
+  const lines = [border("-"), centerLine(title), centerLine(subtitle), border("-")];
+
+  for (const stat of stats) {
+    lines.push(padLine(stat));
+  }
+
+  if (stats.length) {
+    lines.push(padLine(""));
+  }
+
+  for (const item of items) {
+    lines.push(...buildWrappedLines(`\`${item.command}\``, { prefix: "> " }));
+    lines.push(...buildWrappedLines(item.description, { prefix: "  " }));
+  }
+
+  lines.push(border("-"));
+  return lines.join("\n");
+}
+
+function renderSubbotsSection(prefix, items) {
+  const stats = getSubbotStats();
+  const labels = {
+    subbot: "pide un codigo nuevo para otro bot usando tu numero",
+    subbots: "mira slots, tiempos, conexiones y subbots activos",
+    subboton: "abre el acceso publico para que todos pidan subbots",
+    subbotoff: "cierra el acceso publico cuando quieras pausarlo",
+  };
+  const order = ["subbot", "subbots", "subboton", "subbotoff"];
+  const itemMap = new Map(items.map((item) => [item.command, item]));
+  const ordered = [
+    ...order.filter((name) => itemMap.has(name)).map((name) => itemMap.get(name)),
+    ...items.filter((item) => !order.includes(item.command)),
+  ];
+
+  return renderFeatureSection(
+    "SUBBOTS",
+    "crea, vigila y administra los slots del bot",
+    [
+      `Slots: ${stats.maxSlots} | Libres: ${stats.availableSlots} | Activos: ${stats.activeSlots}`,
+      `Reservados: ${stats.enabledSlots} | Modo publico: ${stats.publicRequests ? "ON" : "OFF"}`,
+      `Rapido: ${prefix}subbot 519xxxxxxxxx`,
+      `Panel : ${prefix}subbots`,
+    ],
+    ordered.map((item) => ({
+      command: `${prefix}${item.command}`,
+      description: labels[item.command] || item.description || "control de subbots",
+    }))
+  );
+}
+
+function renderSystemSection(prefix, items) {
+  const memory = process.memoryUsage();
+  const labels = {
+    ping: "mide latencia del bot",
+    runtime: "muestra cuanto tiempo lleva encendido",
+    status: "panel general de estado del bot",
+    sysinfo: "host, ram, cpu, node y entorno",
+    procinfo: "pid, proceso, handles y sesiones activas",
+    botinfo: "resumen del bot, comandos y subbots",
+    update: "actualiza desde GitHub y reinicia",
+  };
+  const order = ["status", "ping", "runtime", "botinfo", "sysinfo", "procinfo", "update"];
+  const itemMap = new Map(items.map((item) => [item.command, item]));
+  const ordered = [
+    ...order.filter((name) => itemMap.has(name)).map((name) => itemMap.get(name)),
+    ...items.filter((item) => !order.includes(item.command)),
+  ];
+
+  return renderFeatureSection(
+    "SISTEMA",
+    "monitor del bot, host y proceso actual",
+    [
+      `Node: ${process.version} | Plataforma: ${os.platform()} ${os.arch()}`,
+      `RSS: ${formatBytes(memory.rss)} | Heap: ${formatBytes(memory.heapUsed)}`,
+      `Host: ${os.hostname()} | Uptime: ${formatUptime(process.uptime())}`,
+      `Debug: ${prefix}whoami | ${prefix}update info`,
+    ],
+    ordered.map((item) => ({
+      command: `${prefix}${item.command}`,
+      description: labels[item.command] || item.description || "herramienta del sistema",
+    }))
+  );
+}
+
+function renderCompactCategory(prefix, category, items) {
+  const lines = [border("."), centerLine(`${getCategoryLabel(category)} :: ${items.length}`), border(".")];
+
+  for (const item of items) {
+    lines.push(...buildWrappedLines(`\`${prefix}${item.command}\` - ${item.description || "sin descripcion"}`, {
+      prefix: "- ",
+    }));
+  }
+
+  lines.push(border("."));
+  return lines.join("\n");
+}
+
+function buildFooter(prefix) {
   return [
     border("="),
-    centerLine("bot premium activo"),
+    centerLine("accesos rapidos"),
+    border("="),
+    padLine(`${prefix}menu | ${prefix}status | ${prefix}botinfo | ${prefix}subbots`),
     border("="),
   ];
 }
@@ -290,14 +344,20 @@ function buildMenuCaption(settings, comandos) {
     const items = categories.get(category) || [];
     if (!items.length) continue;
 
-    sections.push(
-      category === "subbots"
-        ? renderSubbotsCategory(items, prefix)
-        : renderStandardCategory(category, items, prefix)
-    );
+    if (category === "subbots") {
+      sections.push(renderSubbotsSection(prefix, items));
+      continue;
+    }
+
+    if (category === "sistema") {
+      sections.push(renderSystemSection(prefix, items));
+      continue;
+    }
+
+    sections.push(renderCompactCategory(prefix, category, items));
   }
 
-  return [...buildHeader(settings, categories, prefix), ...sections, ...buildFooter()].join(
+  return [...buildHeader(settings, categories, prefix), ...sections, ...buildFooter(prefix)].join(
     "\n"
   );
 }
@@ -305,7 +365,7 @@ function buildMenuCaption(settings, comandos) {
 export default {
   command: ["menu"],
   category: "menu",
-  description: "Menu principal con estilo premium",
+  description: "Menu principal con mejor presentacion",
 
   run: async ({ sock, msg, from, settings, comandos }) => {
     try {
