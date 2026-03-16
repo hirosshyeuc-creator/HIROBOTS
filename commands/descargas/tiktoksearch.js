@@ -1,5 +1,13 @@
 import { searchTikTokVideos } from "./_searchFallbacks.js";
 
+function getPrefix(settings) {
+  if (Array.isArray(settings?.prefix)) {
+    return settings.prefix.find((value) => String(value || "").trim()) || ".";
+  }
+
+  return String(settings?.prefix || ".").trim() || ".";
+}
+
 export default {
   name: "ttsearch",
   command: ["ttksearch", "tts", "tiktoksearch"],
@@ -8,12 +16,13 @@ export default {
 
   run: async ({ sock, msg, from, args, settings }) => {
     const q = args.join(" ").trim();
+    const prefix = getPrefix(settings);
 
     if (!q) {
       return sock.sendMessage(
         from,
         {
-          text: `Uso:\n${settings.prefix}ttksearch <texto>\nEj: ${settings.prefix}ttsearch edit goku`,
+          text: `Uso:\n${prefix}ttksearch <texto>\nEj: ${prefix}ttsearch edit goku`,
           ...global.channelInfo,
         },
         { quoted: msg }

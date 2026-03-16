@@ -1,5 +1,13 @@
 import { searchTikTokVideosByUser } from "./_searchFallbacks.js";
 
+function getPrefix(settings) {
+  if (Array.isArray(settings?.prefix)) {
+    return settings.prefix.find((value) => String(value || "").trim()) || ".";
+  }
+
+  return String(settings?.prefix || ".").trim() || ".";
+}
+
 export default {
   name: "tiktokusuario",
   command: ["tiktokusuario", "ttuser", "ttperfil"],
@@ -8,6 +16,7 @@ export default {
 
   run: async ({ sock, msg, from, args, settings }) => {
     const username = args.join(" ").replace("@", "").trim().toLowerCase();
+    const prefix = getPrefix(settings);
 
     if (!username) {
       return sock.sendMessage(
@@ -15,8 +24,8 @@ export default {
         {
           text:
             `Uso correcto:\n` +
-            `${settings.prefix}tiktokusuario usuario\n` +
-            `${settings.prefix}tiktokusuario @usuario`,
+            `${prefix}tiktokusuario usuario\n` +
+            `${prefix}tiktokusuario @usuario`,
           ...global.channelInfo,
         },
         { quoted: msg }

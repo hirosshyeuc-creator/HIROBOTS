@@ -1,5 +1,13 @@
 import axios from "axios";
 
+function getPrefix(settings) {
+  if (Array.isArray(settings?.prefix)) {
+    return settings.prefix.find((value) => String(value || "").trim()) || ".";
+  }
+
+  return String(settings?.prefix || ".").trim() || ".";
+}
+
 export default {
   name: "gpt5",
   command: ["gpt", "ai", "gpt5"],
@@ -8,11 +16,12 @@ export default {
 
   run: async ({ sock, msg, from, args, settings }) => {
     const prompt = args.join(" ").trim();
+    const prefix = getPrefix(settings);
 
     if (!prompt) {
       return sock.sendMessage(
         from,
-        { text: `❌ Uso:\n${settings.prefix}gpt5 <pregunta>`, ...global.channelInfo },
+        { text: `❌ Uso:\n${prefix}gpt5 <pregunta>`, ...global.channelInfo },
         { quoted: msg }
       );
     }
@@ -24,17 +33,18 @@ export default {
       if (!data?.status) {
         return sock.sendMessage(
           from,
-          { text: `❌ Error: ${data?.message || "No se pudo obtener respuesta"}`, ...global.channelInfo },
+          {
+            text: `❌ Error: ${data?.message || "No se pudo obtener respuesta"}`,
+            ...global.channelInfo,
+          },
           { quoted: msg }
         );
       }
 
       const respuesta = data.response || "Sin respuesta.";
-
-      // Límite de WhatsApp
       const MAX = 6000;
       const textoFinal =
-        respuesta.length > MAX ? respuesta.slice(0, MAX) + "\n\n(Recortado…)" : respuesta;
+        respuesta.length > MAX ? `${respuesta.slice(0, MAX)}\n\n(Recortado...)` : respuesta;
 
       await sock.sendMessage(
         from,

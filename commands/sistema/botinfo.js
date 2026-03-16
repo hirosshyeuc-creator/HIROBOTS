@@ -6,6 +6,18 @@ function getPrefix(settings) {
   return String(settings?.prefix || ".").trim() || ".";
 }
 
+function getPrefixLabel(settings) {
+  if (Array.isArray(settings?.prefix)) {
+    const values = settings.prefix
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+
+    return values.length ? values.join(" | ") : ".";
+  }
+
+  return String(settings?.prefix || ".").trim() || ".";
+}
+
 function countCategories(comandos) {
   const categories = new Set();
 
@@ -53,6 +65,7 @@ export default {
 
   run: async ({ sock, msg, from, settings, comandos }) => {
     const prefix = getPrefix(settings);
+    const prefixLabel = getPrefixLabel(settings);
     const runtime = summarizeRuntime();
     const commandModules = new Set(comandos?.values?.() || []);
 
@@ -60,7 +73,7 @@ export default {
       `*BOTINFO*\n\n` +
       `Bot: *${settings?.botName || "BOT"}*\n` +
       `Owner: *${settings?.ownerName || "Owner"}*\n` +
-      `Prefijo: *${prefix}*\n` +
+      `Prefijos: *${prefixLabel}*\n` +
       `Comandos base: *${commandModules.size}*\n` +
       `Aliases cargados: *${comandos?.size || 0}*\n` +
       `Categorias: *${countCategories(comandos)}*\n` +

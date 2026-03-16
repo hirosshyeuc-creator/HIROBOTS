@@ -1,56 +1,70 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ⏱️ uptime bonito
 function formatUptime(seconds) {
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   return `${h}h ${m}m`;
 }
 
+function getPrimaryPrefix(settings) {
+  if (Array.isArray(settings?.prefix)) {
+    return settings.prefix.find((value) => String(value || "").trim()) || ".";
+  }
+
+  return String(settings?.prefix || ".").trim() || ".";
+}
+
+function getPrefixLabel(settings) {
+  if (Array.isArray(settings?.prefix)) {
+    const values = settings.prefix
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+
+    return values.length ? values.join(" | ") : ".";
+  }
+
+  return String(settings?.prefix || ".").trim() || ".";
+}
+
 export default {
-  command: ['menu'],
-  category: 'menu',
-  description: 'Menú principal con diseño premium',
+  command: ["menu"],
+  category: "menu",
+  description: "Menu principal con diseno premium",
 
   run: async ({ sock, msg, from, settings, comandos }) => {
     try {
       if (!comandos) {
         return sock.sendMessage(
           from,
-          { text: '❌ error interno', ...global.channelInfo },
+          { text: "❌ error interno", ...global.channelInfo },
           { quoted: msg }
         );
       }
 
-      // 🎥 video menú
-      const videoPath = path.join(process.cwd(), 'videos', 'menu-video.mp4');
+      const videoPath = path.join(process.cwd(), "videos", "menu-video.mp4");
       if (!fs.existsSync(videoPath)) {
         return sock.sendMessage(
           from,
-          { text: '❌ video del menú no encontrado', ...global.channelInfo },
+          { text: "❌ video del menu no encontrado", ...global.channelInfo },
           { quoted: msg }
         );
       }
 
       const uptime = formatUptime(process.uptime());
-
-      // 📂 agrupar comandos (solo 1 comando por archivo: el primero)
-      const categorias = {}; // { cat: Set() }
+      const primaryPrefix = getPrimaryPrefix(settings);
+      const prefixLabel = getPrefixLabel(settings);
+      const categorias = {};
 
       for (const cmd of new Set(comandos.values())) {
         if (!cmd?.category || !cmd?.command) continue;
 
         const cat = String(cmd.category).toLowerCase();
-
-        // ✅ tomar SOLO el primer comando (principal)
-        const principal = cmd.name || (Array.isArray(cmd.command)
-          ? cmd.command[0]
-          : cmd.command);
+        const principal = cmd.name || (Array.isArray(cmd.command) ? cmd.command[0] : cmd.command);
 
         if (!principal) continue;
 
@@ -58,18 +72,17 @@ export default {
         categorias[cat].add(String(principal).toLowerCase());
       }
 
-      // 🎨 MENÚ ULTRA DISEÑO
       let menu = `
 ╭══════════════════════╮
 │ ✦ *${settings.botName}* ✦
 ╰══════════════════════╯
 
-▸ _prefijo_ : *${Array.isArray(settings.prefix) ? settings.prefix[0] : settings.prefix}*
-▸ _estado_  : *online*
-▸ _uptime_  : *${uptime}*
+▸ _prefijos_ : *${prefixLabel}*
+▸ _estado_   : *online*
+▸ _uptime_   : *${uptime}*
 
 ┌──────────────────────┐
-│ ✧ *MENÚ DE COMANDOS* ✧
+│ ✧ *MENU DE COMANDOS* ✧
 └──────────────────────┘
 `;
 
@@ -81,7 +94,7 @@ export default {
 │`;
 
         for (const c of lista) {
-          menu += `\n│  • \`${Array.isArray(settings.prefix) ? settings.prefix[0] : settings.prefix}${c}\``;
+          menu += `\n│  • \`${primaryPrefix}${c}\``;
         }
 
         menu += `
@@ -96,26 +109,24 @@ export default {
 _artoria bot vip_
 `;
 
-      // 🚀 enviar como gif
       await sock.sendMessage(
         from,
         {
           video: fs.readFileSync(videoPath),
-          mimetype: 'video/mp4',
+          mimetype: "video/mp4",
           gifPlayback: true,
           caption: menu.trim(),
-          ...global.channelInfo
+          ...global.channelInfo,
         },
         { quoted: msg }
       );
-
     } catch (err) {
-      console.error('MENU ERROR:', err);
+      console.error("MENU ERROR:", err);
       await sock.sendMessage(
         from,
-        { text: '❌ error al mostrar el menú', ...global.channelInfo },
+        { text: "❌ error al mostrar el menu", ...global.channelInfo },
         { quoted: msg }
       );
     }
-  }
+  },
 };
