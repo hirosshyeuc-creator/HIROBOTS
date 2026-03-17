@@ -523,6 +523,37 @@ function normalizeMessageContent(message = {}) {
   return content || {};
 }
 
+function extractInteractiveResponseId(msg = {}) {
+  const paramsJson =
+    msg?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson || "";
+
+  if (paramsJson) {
+    try {
+      const parsed = JSON.parse(paramsJson);
+      const candidates = [
+        parsed?.id,
+        parsed?.rowId,
+        parsed?.selectedId,
+        parsed?.buttonId,
+        parsed?.button_id,
+        parsed?.name,
+        parsed?.title,
+      ];
+
+      const match = candidates.find((value) => String(value || "").trim());
+      if (match) {
+        return String(match).trim();
+      }
+    } catch {}
+  }
+
+  return (
+    msg?.interactiveResponseMessage?.buttonReply?.id ||
+    msg?.interactiveResponseMessage?.buttonReply?.displayText ||
+    ""
+  );
+}
+
 function obtenerTexto(message) {
   const msg = normalizeMessageContent(message);
 
@@ -532,6 +563,7 @@ function obtenerTexto(message) {
     msg?.imageMessage?.caption ||
     msg?.videoMessage?.caption ||
     msg?.documentMessage?.caption ||
+    extractInteractiveResponseId(msg) ||
     msg?.buttonsResponseMessage?.selectedDisplayText ||
     msg?.buttonsResponseMessage?.selectedButtonId ||
     msg?.templateButtonReplyMessage?.selectedId ||
