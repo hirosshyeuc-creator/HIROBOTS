@@ -106,6 +106,26 @@ function normalizeGitPath(value = "") {
   return String(value || "").replace(/\\/g, "/").trim();
 }
 
+function decodeGitQuotedPath(value = "") {
+  const raw = String(value || "").trim();
+  if (!(raw.startsWith('"') && raw.endsWith('"'))) {
+    return raw;
+  }
+
+  return raw
+    .slice(1, -1)
+    .replace(/\\([0-7]{1,3})/g, (_, octal) =>
+      String.fromCharCode(Number.parseInt(octal, 8))
+    )
+    .replace(/\\t/g, "\t")
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\r")
+    .replace(/\\f/g, "\f")
+    .replace(/\\b/g, "\b")
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, "\\");
+}
+
 function uniquePaths(values = []) {
   return Array.from(
     new Set(
@@ -125,8 +145,8 @@ function extractGitStatusPath(line = "") {
   if (raw.length < 4) return "";
   const path = raw.slice(3).trim();
   if (!path) return "";
-  if (!path.includes("->")) return normalizeGitPath(path);
-  return normalizeGitPath(path.split("->").pop());
+  if (!path.includes("->")) return normalizeGitPath(decodeGitQuotedPath(path));
+  return normalizeGitPath(decodeGitQuotedPath(path.split("->").pop()));
 }
 
 function getAuthFolders(settings = {}) {
@@ -151,6 +171,9 @@ function isIgnorableRuntimePath(filePath, settings = {}) {
   const normalized = normalizeGitPath(filePath);
   if (!normalized) return false;
   if (normalized === "tmp" || normalized.startsWith("tmp/")) return true;
+  if (normalized === "node_modules" || normalized.startsWith("node_modules/")) {
+    return true;
+  }
 
   for (const folder of getAuthFolders(settings)) {
     if (normalized === folder || normalized.startsWith(`${folder}/`)) {
