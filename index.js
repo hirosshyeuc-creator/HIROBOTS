@@ -940,6 +940,10 @@ function ensureBotState(config) {
     reconnectTimer: null,
     groupCache: new Map(),
     store: createStoreForBot(config.id),
+    downloadQueue: [],
+    activeDownloadJob: null,
+    activeDownloadStartedAt: 0,
+    downloadQueueCounter: 0,
   };
 
   botStates.set(config.id, state);
@@ -1290,6 +1294,97 @@ function isDownloadCommand(cmd) {
   return category === "descarga" || category === "descargas" || category === "busqueda";
 }
 
+function ensureBotDownloadQueue(botState) {
+  if (!botState) return;
+  if (!Array.isArray(botState.downloadQueue)) {
+    botState.downloadQueue = [];
+  }
+  if (!Number.isFinite(Number(botState.downloadQueueCounter))) {
+    botState.downloadQueueCounter = 0;
+  }
+  if (!Number.isFinite(Number(botState.activeDownloadStartedAt))) {
+    botState.activeDownloadStartedAt = 0;
+  }
+}
+
+function getBotDownloadQueueState(botState) {
+  ensureBotDownloadQueue(botState);
+
+  return {
+    active: Boolean(botState?.activeDownloadJob),
+    pending: Number(botState?.downloadQueue?.length || 0),
+    currentCommand: String(botState?.activeDownloadJob?.commandName || "").trim(),
+    runningForMs:
+      botState?.activeDownloadJob && botState?.activeDownloadStartedAt
+        ? Math.max(0, Date.now() - botState.activeDownloadStartedAt)
+        : 0,
+  };
+}
+
+function processNextDownloadQueueJob(botState) {
+  ensureBotDownloadQueue(botState);
+
+  if (!botState || botState.activeDownloadJob || !botState.downloadQueue.length) {
+    return;
+  }
+
+  const nextJob = botState.downloadQueue.shift();
+  if (!nextJob) return;
+
+  botState.activeDownloadJob = nextJob;
+  botState.activeDownloadStartedAt = Date.now();
+
+  Promise.resolve()
+    .then(() => nextJob.run())
+    .then((result) => {
+      nextJob.resolve(result);
+    })
+    .catch((error) => {
+      nextJob.reject(error);
+    })
+    .finally(() => {
+      if (botState.activeDownloadJob?.id === nextJob.id) {
+        botState.activeDownloadJob = null;
+      }
+      botState.activeDownloadStartedAt = 0;
+      processNextDownloadQueueJob(botState);
+    });
+}
+
+function enqueueDownloadCommand(botState, cmd, commandContext) {
+  ensureBotDownloadQueue(botState);
+
+  const queueState = getBotDownloadQueueState(botState);
+  const queuePosition = queueState.active
+    ? queueState.pending + 2
+    : queueState.pending + 1;
+  const jobId = Number(botState.downloadQueueCounter || 0) + 1;
+  botState.downloadQueueCounter = jobId;
+
+  let resolveJob;
+  let rejectJob;
+  const promise = new Promise((resolve, reject) => {
+    resolveJob = resolve;
+    rejectJob = reject;
+  });
+
+  botState.downloadQueue.push({
+    id: jobId,
+    commandName: commandContext?.commandName || cmd?.name || "descarga",
+    queuedAt: Date.now(),
+    run: async () => cmd.run(commandContext),
+    resolve: resolveJob,
+    reject: rejectJob,
+  });
+
+  processNextDownloadQueueJob(botState);
+
+  return {
+    promise,
+    position: queuePosition,
+  };
+}
+
 async function isBlockedByMaintenance(cmd, context) {
   if (context.esOwner) return false;
 
@@ -1564,6 +1659,7 @@ function summarizeBotState(botState) {
   const cachedPairing = getCachedPairingCode(botState);
   const registered = isBotRegistered(botState);
   const connected = Boolean(botState?.sock?.user?.id);
+  const queueState = getBotDownloadQueueState(botState);
   const configuredNumber = sanitizePhoneNumber(config?.pairingNumber);
   const requesterNumber = sanitizePhoneNumber(config?.requesterNumber) || configuredNumber;
   const requestedAt = normalizeTimestamp(config?.requestedAt);
@@ -1594,6 +1690,10 @@ function summarizeBotState(botState) {
     cachedPairingCode: cachedPairing?.code || "",
     cachedPairingNumber: cachedPairing?.number || "",
     cachedPairingExpiresInMs: cachedPairing?.expiresInMs || 0,
+    downloadQueuePending: queueState.pending,
+    downloadQueueActive: queueState.active,
+    currentDownloadCommand: queueState.currentCommand,
+    currentDownloadRunningForMs: queueState.runningForMs,
   };
 }
 
@@ -1631,6 +1731,10 @@ function summarizeBotConfig(config) {
     cachedPairingCode: "",
     cachedPairingNumber: "",
     cachedPairingExpiresInMs: 0,
+    downloadQueuePending: 0,
+    downloadQueueActive: false,
+    currentDownloadCommand: "",
+    currentDownloadRunningForMs: 0,
   };
 }
 
@@ -2162,6 +2266,31 @@ async function handleIncomingMessages(botState, sock, messages) {
 
       totalComandos++;
       trackCommandUsage(botState, m, commandData.commandName);
+
+      if (isDownloadCommand(cmd)) {
+        const queuedJob = enqueueDownloadCommand(botState, cmd, commandContext);
+
+        if (queuedJob.position > 1) {
+          await sock.sendMessage(
+            commandContext.from,
+            {
+              text:
+                `*COLA DE DESCARGAS ${botState.config.label}*\n\n` +
+                `Tu solicitud *${commandContext.commandName}* fue agregada a la cola.\n` +
+                `Turno: *#${queuedJob.position}*\n` +
+                `Antes de ti: *${queuedJob.position - 1}*\n\n` +
+                `Puedes seguir usando otros comandos mientras esperas.`,
+              ...global.channelInfo,
+            },
+            getQuoteOptions(commandContext.msg)
+          );
+        }
+
+        queuedJob.promise.catch((err) => {
+          console.error(`${getBotTag(botState)} Error comando en cola:`, err);
+        });
+        continue;
+      }
 
       await cmd.run(commandContext);
     } catch (err) {
