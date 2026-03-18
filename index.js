@@ -62,6 +62,7 @@ const SETTINGS_SYNC_INTERVAL_MS = 4000;
 const BOT_RUNTIME_STATE_TTL_MS = 20_000;
 const REMOTE_PAIRING_WAIT_MS = 18_000;
 const SESSION_REPLACED_BLOCK_MS = 15 * 60 * 1000;
+const PROFILE_APPLY_DELAY_MS = 15 * 1000;
 const logger = pino({ level: "silent" });
 const FIXED_BROWSER = ["Windows", "Chrome", "114.0.5735.198"];
 
@@ -604,10 +605,15 @@ async function applyConfiguredBotProfile(botState, sock) {
     return;
   }
 
+  let hadAppStateError = false;
+
   if (typeof sock.updateProfileName === "function" && desiredName) {
     try {
       await sock.updateProfileName(desiredName);
     } catch (error) {
+      if (String(error?.message || error).includes("App state key not present")) {
+        hadAppStateError = true;
+      }
       console.log(`${getBotTag(botState)} No pude actualizar el nombre del perfil: ${error?.message || error}`);
     }
   }
@@ -616,6 +622,9 @@ async function applyConfiguredBotProfile(botState, sock) {
     try {
       await sock.updateProfileStatus(desiredBio);
     } catch (error) {
+      if (String(error?.message || error).includes("App state key not present")) {
+        hadAppStateError = true;
+      }
       console.log(`${getBotTag(botState)} No pude actualizar la bio del perfil: ${error?.message || error}`);
     }
   }
@@ -629,6 +638,9 @@ async function applyConfiguredBotProfile(botState, sock) {
         await sock.updateProfilePicture(sock.user.id, { url: photoSource.path });
       }
     } catch (error) {
+      if (String(error?.message || error).includes("App state key not present")) {
+        hadAppStateError = true;
+      }
       console.log(`${getBotTag(botState)} No pude actualizar la foto del perfil: ${error?.message || error}`);
     } finally {
       if (photoSource?.temporary) {
@@ -639,8 +651,26 @@ async function applyConfiguredBotProfile(botState, sock) {
     }
   }
 
+  if (hadAppStateError) {
+    return;
+  }
+
   botState.lastProfileSignature = signature;
   botState.lastProfileAppliedAt = Date.now();
+}
+
+function scheduleProfileApply(botState, sock, delayMs = PROFILE_APPLY_DELAY_MS) {
+  if (!botState || !sock) return;
+
+  clearProfileApplyTimer(botState);
+  botState.profileApplyTimer = setTimeout(() => {
+    botState.profileApplyTimer = null;
+    applyConfiguredBotProfile(botState, sock).catch((error) => {
+      console.log(`${getBotTag(botState)} No pude aplicar el perfil automatico: ${error?.message || error}`);
+    });
+  }, Math.max(1000, Number(delayMs || PROFILE_APPLY_DELAY_MS)));
+
+  botState.profileApplyTimer.unref?.();
 }
 
 function runPm2Command(args = [], extraEnv = {}) {
@@ -1463,6 +1493,7 @@ function ensureBotState(config) {
     reconnectAttempts: 0,
     lastProfileSignature: "",
     lastProfileAppliedAt: 0,
+    profileApplyTimer: null,
     reconnectTimer: null,
     groupCache: new Map(),
     store: createStoreForBot(config.id),
@@ -1479,6 +1510,16 @@ function clearReplacementBlock(botState) {
   botState.replacementBlocked = false;
   botState.replacementBlockedAt = 0;
   botState.replacementBlockedUntil = 0;
+}
+
+function clearProfileApplyTimer(botState) {
+  if (!botState?.profileApplyTimer) return;
+
+  try {
+    clearTimeout(botState.profileApplyTimer);
+  } catch {}
+
+  botState.profileApplyTimer = null;
 }
 
 function markReplacementBlocked(botState) {
@@ -2688,6 +2729,7 @@ function stopLocalManagedBot(botState, reason = "disabled") {
 
   clearReconnectTimer(botState);
   clearPairingResetTimer(botState);
+  clearProfileApplyTimer(botState);
 
   try {
     botState.sock?.end?.();
@@ -3440,7 +3482,7 @@ async function iniciarInstanciaBot(config) {
           botState.lastDisconnectAt = 0;
           resetPairingCache(botState);
           botState.pairingCommandHintShown = false;
-          await applyConfiguredBotProfile(botState, sock);
+          scheduleProfileApply(botState, sock);
           console.log(
             chalk.green(
               `${getBotTag(botState)} Ya conectado bot ${resolveConfiguredBotName(config)}`
@@ -3472,6 +3514,7 @@ async function iniciarInstanciaBot(config) {
 
           botState.sock = null;
           botState.lastDisconnectAt = Date.now();
+          clearProfileApplyTimer(botState);
           resetPairingCache(botState);
           writePersistedBotRuntimeState(botState);
 
@@ -3507,7 +3550,11 @@ async function iniciarInstanciaBot(config) {
       }
     });
 
-    sock.ev.on("messages.upsert", async ({ messages }) => {
+    sock.ev.on("messages.upsert", async ({ messages, type }) => {
+      if (type && type !== "notify") {
+        return;
+      }
+
       await handleIncomingMessages(botState, sock, messages);
     });
 
@@ -3617,6 +3664,9 @@ process.on("SIGINT", () => {
     try {
       if (botState.reconnectTimer) {
         clearTimeout(botState.reconnectTimer);
+      }
+      if (botState.profileApplyTimer) {
+        clearTimeout(botState.profileApplyTimer);
       }
     } catch {}
 
