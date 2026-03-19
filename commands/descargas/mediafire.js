@@ -3,6 +3,7 @@ import path from "path";
 import os from "os";
 import axios from "axios";
 import { pipeline } from "stream/promises";
+import { chargeDownloadRequest, refundDownloadCharge } from "../economia/download-access.js";
 
 const API_BASE = "https://dv-yer-api.online";
 const API_MEDIAFIRE_URL = `${API_BASE}/mediafire`;
@@ -314,6 +315,7 @@ export default {
     const userId = `${from}:mediafire`;
 
     let tempPath = null;
+    let downloadCharge = null;
 
     const until = cooldowns.get(userId);
     if (until && until > Date.now()) {
@@ -335,6 +337,15 @@ export default {
           text: "Uso: .mediafire <link publico de MediaFire> o responde a un mensaje con el link",
           ...global.channelInfo,
         });
+      }
+
+      downloadCharge = await chargeDownloadRequest(ctx, {
+        feature: "mediafire",
+        fileUrl,
+      });
+      if (!downloadCharge.ok) {
+        cooldowns.delete(userId);
+        return;
       }
 
       await sock.sendMessage(
@@ -360,6 +371,10 @@ export default {
       });
     } catch (error) {
       console.error("MEDIAFIRE ERROR:", error?.message || error);
+      refundDownloadCharge(ctx, downloadCharge, {
+        feature: "mediafire",
+        error: String(error?.message || error || "unknown_error"),
+      });
       cooldowns.delete(userId);
 
       await sock.sendMessage(from, {

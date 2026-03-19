@@ -1,13 +1,14 @@
-import { formatCoins, getShopItems } from "./_shared.js";
+import { formatCoins, getPrefix, getShopItems } from "./_shared.js";
 
 export default {
   name: "shop",
   command: ["shop", "tienda"],
   category: "economia",
-  description: "Muestra la tienda de economia",
+  description: "Muestra la tienda de dolares y solicitudes",
 
-  run: async ({ sock, msg, from }) => {
-    const lines = getShopItems().map(
+  run: async ({ sock, msg, from, settings }) => {
+    const prefix = getPrefix(settings);
+    const lines = getShopItems(settings).map(
       (item) =>
         `*${item.id}* - ${formatCoins(item.price)}\n${item.name}\n${item.description}`
     );
@@ -16,9 +17,10 @@ export default {
       from,
       {
         text:
-          `*TIENDA ECONOMIA*\n\n` +
+          `*TIENDA DE DOLARES*\n\n` +
           `${lines.join("\n\n")}\n\n` +
-          `Compra con: *.buy id_del_item*`,
+          `Compra con: *${prefix}buy id_del_item*\n` +
+          `O compra solicitudes directas con: *${prefix}buyrequests 5*`,
         ...global.channelInfo,
       },
       { quoted: msg }

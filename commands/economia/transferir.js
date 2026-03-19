@@ -11,9 +11,9 @@ function normalizeTarget(value = "") {
 
 export default {
   name: "transferir",
-  command: ["transferir", "pay", "givecoins"],
+  command: ["transferir", "pay", "givecoins", "transferirdolares"],
   category: "economia",
-  description: "Transfiere coins a otro usuario",
+  description: "Transfiere dolares a otro usuario",
 
   run: async ({ sock, msg, from, sender, args = [] }) => {
     const target = normalizeTarget(args[0]);

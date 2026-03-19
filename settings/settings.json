@@ -137,7 +137,12 @@
     "mainBotBio": "Ya conectado bot Fsociety",
     "mainBotPhoto": "assets/profile/fsociety-bot-profile",
     "subbotBioTemplate": "Subbot Fsociety activo",
-    "subbotPhoto": ""
+    "subbotPhoto": "",
+    "economy": {
+      "downloadBillingEnabled": false,
+      "dailyDownloadRequests": 50,
+      "requestPrice": 25
+    }
   },
   "newsletter": {
     "enabled": true,

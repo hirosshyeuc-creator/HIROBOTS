@@ -4,7 +4,7 @@ export default {
   name: "buy",
   command: ["buy", "comprar"],
   category: "economia",
-  description: "Compra un item de la tienda",
+  description: "Compra un item o pack de solicitudes en la tienda",
 
   run: async ({ sock, msg, from, sender, args = [], settings }) => {
     const itemId = String(args[0] || "").trim().toLowerCase();
@@ -21,7 +21,7 @@ export default {
       );
     }
 
-    const result = buyItem(sender, itemId);
+    const result = buyItem(sender, itemId, settings);
     if (!result.ok) {
       let text = "No pude completar la compra.";
 
@@ -50,6 +50,7 @@ export default {
           `*COMPRA EXITOSA*\n\n` +
           `Item: *${result.item.id}*\n` +
           `Precio: *${formatCoins(result.item.price)}*\n` +
+          `${result.grantedRequests ? `Solicitudes extra: *+${result.grantedRequests}*\n` : ""}` +
           `Saldo actual: *${formatCoins(result.user.coins || 0)}*`,
         ...global.channelInfo,
       },

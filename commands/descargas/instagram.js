@@ -4,6 +4,7 @@ import os from "os";
 import axios from "axios";
 import { pipeline } from "stream/promises";
 import { spawn } from "child_process";
+import { chargeDownloadRequest, refundDownloadCharge } from "../economia/download-access.js";
 
 const API_BASE = "https://dv-yer-api.online";
 const API_INSTAGRAM_URL = `${API_BASE}/instagram`;
@@ -393,6 +394,7 @@ export default {
 
     let rawPath = null;
     let finalPath = null;
+    let downloadCharge = null;
 
     const until = cooldowns.get(userId);
     if (until && until > Date.now()) {
@@ -415,6 +417,16 @@ export default {
           text: "❌ Uso: .instagram <link>\n❌ O: .instagram 2 <link>",
           ...global.channelInfo,
         });
+      }
+
+      downloadCharge = await chargeDownloadRequest(ctx, {
+        feature: "instagram",
+        postUrl,
+        pick,
+      });
+      if (!downloadCharge.ok) {
+        cooldowns.delete(userId);
+        return;
       }
 
       await sock.sendMessage(
@@ -477,6 +489,10 @@ export default {
       });
     } catch (err) {
       console.error("INSTAGRAM ERROR:", err?.message || err);
+      refundDownloadCharge(ctx, downloadCharge, {
+        feature: "instagram",
+        error: String(err?.message || err || "unknown_error"),
+      });
 
       await sock.sendMessage(from, {
         text: `❌ ${String(err?.message || "No se pudo procesar la publicación de Instagram.")}`,

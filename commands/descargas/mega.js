@@ -4,6 +4,7 @@ import os from "os";
 import axios from "axios";
 import { pipeline } from "stream/promises";
 import { buildDvyerUrl, getDvyerBaseUrl } from "../../lib/api-manager.js";
+import { chargeDownloadRequest, refundDownloadCharge } from "../economia/download-access.js";
 
 const API_MEGA_URL = buildDvyerUrl("/mega");
 const COOLDOWN_TIME = 15 * 1000;
@@ -317,6 +318,7 @@ export default {
     const userId = `${from}:mega`;
 
     let tempPath = null;
+    let downloadCharge = null;
 
     const until = cooldowns.get(userId);
     if (until && until > Date.now()) {
@@ -346,6 +348,15 @@ export default {
         );
       }
 
+      downloadCharge = await chargeDownloadRequest(ctx, {
+        feature: "mega",
+        fileUrl,
+      });
+      if (!downloadCharge.ok) {
+        cooldowns.delete(userId);
+        return;
+      }
+
       await sock.sendMessage(
         from,
         {
@@ -370,6 +381,10 @@ export default {
       });
     } catch (error) {
       console.error("MEGA ERROR:", error?.message || error);
+      refundDownloadCharge(ctx, downloadCharge, {
+        feature: "mega",
+        error: String(error?.message || error || "unknown_error"),
+      });
       cooldowns.delete(userId);
 
       await sock.sendMessage(

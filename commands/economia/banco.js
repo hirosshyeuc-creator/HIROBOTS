@@ -10,7 +10,7 @@ export default {
   name: "banco",
   command: ["banco", "bank"],
   category: "economia",
-  description: "Deposita o retira coins del banco",
+  description: "Deposita o retira dolares del banco",
 
   run: async ({ sock, msg, from, sender, args = [], settings }) => {
     const action = String(args[0] || "status").trim().toLowerCase();
@@ -42,7 +42,7 @@ export default {
       return sock.sendMessage(
         from,
         {
-          text: `Retiro completado.\nCoins: *${formatCoins(result.user.coins)}*`,
+          text: `Retiro completado.\nDolares: *${formatCoins(result.user.coins)}*`,
           ...global.channelInfo,
         },
         { quoted: msg }

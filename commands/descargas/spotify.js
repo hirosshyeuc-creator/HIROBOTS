@@ -3,6 +3,7 @@ import path from "path";
 import os from "os";
 import axios from "axios";
 import { pipeline } from "stream/promises";
+import { chargeDownloadRequest, refundDownloadCharge } from "../economia/download-access.js";
 
 const API_BASE = "https://dv-yer-api.online";
 const API_SPOTIFY_URL = `${API_BASE}/spotify`;
@@ -418,6 +419,7 @@ export default {
     const userId = `${from}:spotify`;
 
     let tempPath = null;
+    let downloadCharge = null;
 
     const until = cooldowns.get(userId);
     if (until && until > Date.now()) {
@@ -438,6 +440,15 @@ export default {
           text: "❌ Uso: .spotify <canción, artista o url de Spotify>",
           ...global.channelInfo,
         });
+      }
+
+      downloadCharge = await chargeDownloadRequest(ctx, {
+        feature: "spotify",
+        query: userInput,
+      });
+      if (!downloadCharge.ok) {
+        cooldowns.delete(userId);
+        return;
       }
 
       await sock.sendMessage(
@@ -513,6 +524,10 @@ export default {
       });
     } catch (err) {
       console.error("SPOTIFY ERROR:", err?.message || err);
+      refundDownloadCharge(ctx, downloadCharge, {
+        feature: "spotify",
+        error: String(err?.message || err || "unknown_error"),
+      });
       cooldowns.delete(userId);
 
       await sock.sendMessage(from, {

@@ -6,6 +6,8 @@ const DB_DIR = path.join(process.cwd(), "database");
 const FILE = path.join(DB_DIR, "economy.json");
 const DAILY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_DAILY_REWARD = 250;
+const DEFAULT_DAILY_DOWNLOAD_REQUESTS = 50;
+const DEFAULT_REQUEST_PRICE = 25;
 
 if (!fs.existsSync(DB_DIR)) {
   fs.mkdirSync(DB_DIR, { recursive: true });
@@ -58,6 +60,16 @@ function scheduleSave() {
   saveTimer.unref?.();
 }
 
+function clampInteger(value, fallback, min = 0, max = Number.MAX_SAFE_INTEGER) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(parsed)));
+}
+
+function getTodayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 export function normalizeJidUser(value = "") {
   const jid = String(value || "").trim();
   if (!jid) return "";
@@ -70,6 +82,37 @@ export function formatUserLabel(value = "") {
   return digits ? `+${digits}` : normalizeJidUser(value) || "Desconocido";
 }
 
+export function formatCoins(value = 0) {
+  return `US$ ${Number(value || 0).toLocaleString("es-PE")}`;
+}
+
+export function getPrefix(settings) {
+  if (Array.isArray(settings?.prefix)) {
+    return settings.prefix.find((value) => String(value || "").trim()) || ".";
+  }
+  return String(settings?.prefix || ".").trim() || ".";
+}
+
+export function getEconomyConfig(settings = {}) {
+  const source =
+    settings?.system?.economy &&
+    typeof settings.system.economy === "object" &&
+    !Array.isArray(settings.system.economy)
+      ? settings.system.economy
+      : {};
+
+  return {
+    downloadBillingEnabled: source.downloadBillingEnabled === true,
+    dailyDownloadRequests: clampInteger(
+      source.dailyDownloadRequests,
+      DEFAULT_DAILY_DOWNLOAD_REQUESTS,
+      0,
+      5000
+    ),
+    requestPrice: clampInteger(source.requestPrice, DEFAULT_REQUEST_PRICE, 1, 100000),
+  };
+}
+
 function ensureUser(userId) {
   const normalizedId = normalizeJidUser(userId);
   if (!normalizedId) return null;
@@ -77,6 +120,7 @@ function ensureUser(userId) {
   if (!state.users[normalizedId]) {
     state.users[normalizedId] = {
       id: normalizedId,
+      registeredAt: new Date().toISOString(),
       coins: 0,
       totalEarned: 0,
       totalSpent: 0,
@@ -87,6 +131,15 @@ function ensureUser(userId) {
       lastGameRewardAt: 0,
       lastWorkAt: 0,
       history: [],
+      requests: {
+        dayKey: "",
+        dailyUsed: 0,
+        dailyLimitSnapshot: DEFAULT_DAILY_DOWNLOAD_REQUESTS,
+        extra: 0,
+        totalPurchased: 0,
+        totalConsumed: 0,
+        totalRefunded: 0,
+      },
     };
   }
 
@@ -106,7 +159,73 @@ function ensureUser(userId) {
   if (!Number.isFinite(Number(user.lastWorkAt))) {
     user.lastWorkAt = 0;
   }
+  if (!String(user.registeredAt || "").trim()) {
+    user.registeredAt = new Date().toISOString();
+  }
+  if (!user.requests || typeof user.requests !== "object" || Array.isArray(user.requests)) {
+    user.requests = {};
+  }
+
+  user.requests.dayKey = String(user.requests.dayKey || "").trim();
+  user.requests.dailyUsed = clampInteger(user.requests.dailyUsed, 0, 0, 500000);
+  user.requests.dailyLimitSnapshot = clampInteger(
+    user.requests.dailyLimitSnapshot,
+    DEFAULT_DAILY_DOWNLOAD_REQUESTS,
+    0,
+    5000
+  );
+  user.requests.extra = clampInteger(user.requests.extra, 0, 0, 500000);
+  user.requests.totalPurchased = clampInteger(user.requests.totalPurchased, 0, 0, 5000000);
+  user.requests.totalConsumed = clampInteger(user.requests.totalConsumed, 0, 0, 5000000);
+  user.requests.totalRefunded = clampInteger(user.requests.totalRefunded, 0, 0, 5000000);
+
   return user;
+}
+
+function ensureRequestState(user, settings = {}) {
+  if (!user) return null;
+
+  const config = getEconomyConfig(settings);
+  const todayKey = getTodayKey();
+
+  if (String(user.requests.dayKey || "") !== todayKey) {
+    user.requests.dayKey = todayKey;
+    user.requests.dailyUsed = 0;
+    user.requests.dailyLimitSnapshot = config.dailyDownloadRequests;
+  }
+
+  if (!Number.isFinite(Number(user.requests.dailyLimitSnapshot))) {
+    user.requests.dailyLimitSnapshot = config.dailyDownloadRequests;
+  }
+
+  return config;
+}
+
+function buildRequestSnapshot(user, settings = {}) {
+  const config = ensureRequestState(user, settings) || getEconomyConfig(settings);
+  const dailyLimit = clampInteger(
+    user?.requests?.dailyLimitSnapshot,
+    config.dailyDownloadRequests,
+    0,
+    5000
+  );
+  const dailyUsed = clampInteger(user?.requests?.dailyUsed, 0, 0, 500000);
+  const extraRemaining = clampInteger(user?.requests?.extra, 0, 0, 500000);
+  const dailyRemaining = Math.max(0, dailyLimit - dailyUsed);
+
+  return {
+    enabled: config.downloadBillingEnabled,
+    dayKey: String(user?.requests?.dayKey || getTodayKey()),
+    dailyLimit,
+    dailyUsed,
+    dailyRemaining,
+    extraRemaining,
+    available: dailyRemaining + extraRemaining,
+    requestPrice: config.requestPrice,
+    totalPurchased: clampInteger(user?.requests?.totalPurchased, 0, 0, 5000000),
+    totalConsumed: clampInteger(user?.requests?.totalConsumed, 0, 0, 5000000),
+    totalRefunded: clampInteger(user?.requests?.totalRefunded, 0, 0, 5000000),
+  };
 }
 
 function pushHistory(user, entry) {
@@ -117,21 +236,35 @@ function pushHistory(user, entry) {
   user.history = user.history.slice(0, 20);
 }
 
-export function formatCoins(value = 0) {
-  return `${Number(value || 0).toLocaleString("es-PE")} coins`;
+export function touchEconomyProfile(userId, settings = {}) {
+  const normalizedId = normalizeJidUser(userId);
+  if (!normalizedId) return null;
+
+  const existed = Boolean(state.users[normalizedId]);
+  const user = ensureUser(normalizedId);
+  ensureRequestState(user, settings);
+  scheduleSave();
+  return {
+    user,
+    isNew: !existed,
+    requests: buildRequestSnapshot(user, settings),
+  };
 }
 
-export function getPrefix(settings) {
-  if (Array.isArray(settings?.prefix)) {
-    return settings.prefix.find((value) => String(value || "").trim()) || ".";
-  }
-  return String(settings?.prefix || ".").trim() || ".";
-}
-
-export function getEconomyProfile(userId) {
+export function getEconomyProfile(userId, settings = {}) {
   const user = ensureUser(userId);
+  if (!user) return null;
+  ensureRequestState(user, settings);
   scheduleSave();
   return user;
+}
+
+export function getDownloadRequestState(userId, settings = {}) {
+  const user = ensureUser(userId);
+  if (!user) return null;
+  const requests = buildRequestSnapshot(user, settings);
+  scheduleSave();
+  return requests;
 }
 
 export function addCoins(userId, amount, reason = "bonus", meta = {}) {
@@ -179,6 +312,270 @@ export function spendCoins(userId, amount, reason = "buy", meta = {}) {
   return { ok: true, user };
 }
 
+export function setCoinsBalance(userId, amount, reason = "owner_set_balance", meta = {}) {
+  const user = ensureUser(userId);
+  if (!user) return null;
+
+  const normalizedAmount = Math.max(0, Math.floor(Number(amount || 0)));
+  user.coins = normalizedAmount;
+  pushHistory(user, {
+    type: "admin_set_balance",
+    amount: normalizedAmount,
+    reason,
+    meta,
+  });
+  scheduleSave();
+  return user;
+}
+
+export function removeCoins(userId, amount, reason = "owner_remove_balance", meta = {}) {
+  return spendCoins(userId, amount, reason, meta);
+}
+
+export function addDownloadRequests(
+  userId,
+  amount,
+  reason = "manual_request_bonus",
+  meta = {},
+  settings = {}
+) {
+  const user = ensureUser(userId);
+  if (!user) return { ok: false, status: "missing_user" };
+
+  ensureRequestState(user, settings);
+  const normalizedAmount = Math.max(0, Math.floor(Number(amount || 0)));
+  if (!normalizedAmount) return { ok: false, status: "invalid_amount", user };
+
+  const countAsPurchased =
+    meta?.countAsPurchased === true ||
+    reason === "buy_download_requests" ||
+    reason === "shop_request_pack";
+
+  user.requests.extra += normalizedAmount;
+  if (countAsPurchased) {
+    user.requests.totalPurchased += normalizedAmount;
+  }
+  pushHistory(user, {
+    type: "request_add",
+    amount: normalizedAmount,
+    reason,
+    meta,
+  });
+  scheduleSave();
+
+  return {
+    ok: true,
+    user,
+    amount: normalizedAmount,
+    requests: buildRequestSnapshot(user, settings),
+  };
+}
+
+export function removeDownloadRequests(
+  userId,
+  amount,
+  reason = "owner_remove_requests",
+  meta = {},
+  settings = {}
+) {
+  const user = ensureUser(userId);
+  if (!user) return { ok: false, status: "missing_user" };
+
+  ensureRequestState(user, settings);
+  const normalizedAmount = Math.max(0, Math.floor(Number(amount || 0)));
+  if (!normalizedAmount) return { ok: false, status: "invalid_amount", user };
+  if (user.requests.extra < normalizedAmount) {
+    return {
+      ok: false,
+      status: "insufficient_extra",
+      missing: normalizedAmount - user.requests.extra,
+      user,
+      requests: buildRequestSnapshot(user, settings),
+    };
+  }
+
+  user.requests.extra -= normalizedAmount;
+  pushHistory(user, {
+    type: "request_remove",
+    amount: normalizedAmount,
+    reason,
+    meta,
+  });
+  scheduleSave();
+
+  return {
+    ok: true,
+    user,
+    amount: normalizedAmount,
+    requests: buildRequestSnapshot(user, settings),
+  };
+}
+
+export function setDownloadRequests(
+  userId,
+  amount,
+  reason = "owner_set_requests",
+  meta = {},
+  settings = {}
+) {
+  const user = ensureUser(userId);
+  if (!user) return { ok: false, status: "missing_user" };
+
+  ensureRequestState(user, settings);
+  const normalizedAmount = Math.max(0, Math.floor(Number(amount || 0)));
+  user.requests.extra = normalizedAmount;
+  pushHistory(user, {
+    type: "request_set",
+    amount: normalizedAmount,
+    reason,
+    meta,
+  });
+  scheduleSave();
+
+  return {
+    ok: true,
+    user,
+    amount: normalizedAmount,
+    requests: buildRequestSnapshot(user, settings),
+  };
+}
+
+export function consumeDownloadRequest(userId, settings = {}, meta = {}) {
+  const user = ensureUser(userId);
+  if (!user) return { ok: false, status: "missing_user" };
+
+  const snapshot = buildRequestSnapshot(user, settings);
+  if (snapshot.available <= 0) {
+    return {
+      ok: false,
+      status: "no_requests",
+      user,
+      ...snapshot,
+    };
+  }
+
+  let remaining = 1;
+  const consumedDaily = Math.min(snapshot.dailyRemaining, remaining);
+  user.requests.dailyUsed += consumedDaily;
+  remaining -= consumedDaily;
+
+  const consumedExtra = Math.min(user.requests.extra, remaining);
+  user.requests.extra -= consumedExtra;
+  remaining -= consumedExtra;
+
+  if (remaining > 0) {
+    return {
+      ok: false,
+      status: "no_requests",
+      user,
+      ...buildRequestSnapshot(user, settings),
+    };
+  }
+
+  user.requests.totalConsumed += consumedDaily + consumedExtra;
+  pushHistory(user, {
+    type: "request_use",
+    amount: consumedDaily + consumedExtra,
+    reason: "download_request",
+    meta: {
+      ...meta,
+      consumedDaily,
+      consumedExtra,
+    },
+  });
+  scheduleSave();
+
+  return {
+    ok: true,
+    user,
+    consumedDaily,
+    consumedExtra,
+    requests: buildRequestSnapshot(user, settings),
+  };
+}
+
+export function refundDownloadRequest(userId, chargeInfo = {}, settings = {}, meta = {}) {
+  const user = ensureUser(userId);
+  if (!user) return { ok: false, status: "missing_user" };
+
+  ensureRequestState(user, settings);
+
+  const consumedDaily = clampInteger(chargeInfo?.consumedDaily, 0, 0, 1);
+  const consumedExtra = clampInteger(chargeInfo?.consumedExtra, 0, 0, 1);
+  const refundedAmount = consumedDaily + consumedExtra;
+
+  if (!refundedAmount) {
+    return {
+      ok: false,
+      status: "nothing_to_refund",
+      user,
+      requests: buildRequestSnapshot(user, settings),
+    };
+  }
+
+  user.requests.dailyUsed = Math.max(0, user.requests.dailyUsed - consumedDaily);
+  user.requests.extra += consumedExtra;
+  user.requests.totalConsumed = Math.max(0, user.requests.totalConsumed - refundedAmount);
+  user.requests.totalRefunded += refundedAmount;
+  pushHistory(user, {
+    type: "request_refund",
+    amount: refundedAmount,
+    reason: "download_request_refund",
+    meta,
+  });
+  scheduleSave();
+
+  return {
+    ok: true,
+    user,
+    refundedAmount,
+    requests: buildRequestSnapshot(user, settings),
+  };
+}
+
+export function buyDownloadRequests(userId, amount, settings = {}) {
+  const normalizedAmount = Math.max(0, Math.floor(Number(amount || 0)));
+  if (!normalizedAmount) {
+    return { ok: false, status: "invalid_amount" };
+  }
+
+  const config = getEconomyConfig(settings);
+  const totalCost = normalizedAmount * config.requestPrice;
+  const spend = spendCoins(userId, totalCost, "buy_download_requests", {
+    amount: normalizedAmount,
+    pricePerRequest: config.requestPrice,
+  });
+
+  if (!spend.ok) {
+    return {
+      ok: false,
+      status: "insufficient",
+      missing: spend.missing,
+      user: spend.user,
+      requestPrice: config.requestPrice,
+    };
+  }
+
+  const grant = addDownloadRequests(
+    userId,
+    normalizedAmount,
+    "buy_download_requests",
+    {
+      pricePerRequest: config.requestPrice,
+    },
+    settings
+  );
+
+  return {
+    ok: true,
+    amount: normalizedAmount,
+    totalCost,
+    requestPrice: config.requestPrice,
+    user: grant.user,
+    requests: grant.requests,
+  };
+}
+
 export function claimDaily(userId) {
   const user = ensureUser(userId);
   if (!user) {
@@ -206,8 +603,30 @@ export function claimDaily(userId) {
   };
 }
 
-export function getShopItems() {
+export function getShopItems(settings = {}) {
+  const config = getEconomyConfig(settings);
   return [
+    {
+      id: "req_5",
+      price: config.requestPrice * 5,
+      name: "Pack 5 solicitudes",
+      description: "Agrega 5 solicitudes extra para descargas.",
+      requests: 5,
+    },
+    {
+      id: "req_15",
+      price: config.requestPrice * 15,
+      name: "Pack 15 solicitudes",
+      description: "Agrega 15 solicitudes extra para descargas.",
+      requests: 15,
+    },
+    {
+      id: "req_40",
+      price: config.requestPrice * 40,
+      name: "Pack 40 solicitudes",
+      description: "Agrega 40 solicitudes extra para descargas.",
+      requests: 40,
+    },
     {
       id: "marco_pro",
       price: 600,
@@ -235,11 +654,13 @@ export function getShopItems() {
   ];
 }
 
-export function buyItem(userId, itemId) {
+export function buyItem(userId, itemId, settings = {}) {
   const user = ensureUser(userId);
   if (!user) return { ok: false, status: "missing_user" };
 
-  const item = getShopItems().find((entry) => entry.id === String(itemId || "").trim().toLowerCase());
+  const item = getShopItems(settings).find(
+    (entry) => entry.id === String(itemId || "").trim().toLowerCase()
+  );
   if (!item) {
     return { ok: false, status: "missing_item" };
   }
@@ -249,12 +670,28 @@ export function buyItem(userId, itemId) {
     return { ok: false, status: "insufficient", item, missing: spend.missing, user: spend.user };
   }
 
-  user.inventory[item.id] = Number(user.inventory[item.id] || 0) + 1;
-  scheduleSave();
+  let grantedRequests = 0;
+
+  if (Number(item.requests || 0) > 0) {
+    grantedRequests = Math.max(0, Math.floor(Number(item.requests || 0)));
+    addDownloadRequests(
+      userId,
+      grantedRequests,
+      "shop_request_pack",
+      { itemId: item.id },
+      settings
+    );
+  } else {
+    user.inventory[item.id] = Number(user.inventory[item.id] || 0) + 1;
+    scheduleSave();
+  }
+
   return {
     ok: true,
     item,
-    user,
+    grantedRequests,
+    user: ensureUser(userId),
+    requests: buildRequestSnapshot(ensureUser(userId), settings),
   };
 }
 
@@ -266,10 +703,27 @@ export function getTopCoins(limit = 10) {
       bank: Number(user.bank || 0),
       total: Number(user.coins || 0) + Number(user.bank || 0),
       totalEarned: Number(user.totalEarned || 0),
+      requestsUsed: Number(user?.requests?.totalConsumed || 0),
     }))
     .sort((a, b) => {
       if (b.total !== a.total) return b.total - a.total;
       return b.totalEarned - a.totalEarned;
+    })
+    .slice(0, Math.max(1, Math.min(20, Number(limit || 10))));
+}
+
+export function getTopRequestUsers(limit = 10, settings = {}) {
+  return Object.values(state.users)
+    .map((user) => ({
+      id: user.id,
+      available: buildRequestSnapshot(user, settings).available,
+      totalConsumed: Number(user?.requests?.totalConsumed || 0),
+      totalPurchased: Number(user?.requests?.totalPurchased || 0),
+    }))
+    .sort((a, b) => {
+      if (b.totalConsumed !== a.totalConsumed) return b.totalConsumed - a.totalConsumed;
+      if (b.totalPurchased !== a.totalPurchased) return b.totalPurchased - a.totalPurchased;
+      return b.available - a.available;
     })
     .slice(0, Math.max(1, Math.min(20, Number(limit || 10))));
 }

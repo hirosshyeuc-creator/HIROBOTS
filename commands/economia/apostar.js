@@ -5,9 +5,9 @@ import {
 
 export default {
   name: "apostar",
-  command: ["apostar", "bet", "apostarcoins"],
+  command: ["apostar", "bet", "apostarcoins", "apostardolares"],
   category: "economia",
-  description: "Apuesta coins para intentar ganar mas",
+  description: "Apuesta dolares para intentar ganar mas",
 
   run: async ({ sock, msg, from, sender, args = [] }) => {
     const amount = Number(args[0] || 0);

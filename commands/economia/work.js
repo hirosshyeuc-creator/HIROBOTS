@@ -8,7 +8,7 @@ export default {
   name: "work",
   command: ["work", "trabajar", "job"],
   category: "economia",
-  description: "Trabaja para ganar coins con cooldown",
+  description: "Trabaja para ganar dolares con cooldown",
 
   run: async ({ sock, msg, from, sender }) => {
     const result = claimWorkReward(sender);

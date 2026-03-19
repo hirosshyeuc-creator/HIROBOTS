@@ -30,6 +30,7 @@ import {
   setAutoCleanConfig,
 } from "./lib/autoclean.js";
 import { applyStoredRuntimeVars } from "./lib/runtime-vars.js";
+import { touchEconomyProfile } from "./commands/economia/_shared.js";
 
 const makeWASocket =
   (typeof baileys.makeWASocket === "function" && baileys.makeWASocket) ||
@@ -405,6 +406,21 @@ function ensureSystemSettings(currentSettings) {
       .trim()
       .slice(0, 139);
   currentSettings.system.subbotPhoto = String(currentSettings.system.subbotPhoto || "").trim();
+
+  if (!isPlainObject(currentSettings.system.economy)) {
+    currentSettings.system.economy = {};
+  }
+
+  currentSettings.system.economy.downloadBillingEnabled =
+    currentSettings.system.economy.downloadBillingEnabled === true;
+  currentSettings.system.economy.dailyDownloadRequests = Math.max(
+    0,
+    Math.min(5000, Math.floor(Number(currentSettings.system.economy.dailyDownloadRequests || 50)))
+  );
+  currentSettings.system.economy.requestPrice = Math.max(
+    1,
+    Math.min(100000, Math.floor(Number(currentSettings.system.economy.requestPrice || 25)))
+  );
 }
 
 function saveSettingsFile() {
@@ -3401,6 +3417,7 @@ async function handleIncomingMessages(botState, sock, messages) {
       if (blockedByHook) continue;
 
       if (!commandData) continue;
+      touchEconomyProfile(m.sender, settings);
       failedCommandName = commandData.commandName;
 
       const cmd = comandos.get(commandData.commandName);

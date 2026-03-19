@@ -3,6 +3,7 @@ import path from "path";
 import os from "os";
 import axios from "axios";
 import { pipeline } from "stream/promises";
+import { chargeDownloadRequest, refundDownloadCharge } from "../economia/download-access.js";
 
 const API_BASE = "https://dv-yer-api.online";
 const API_FACEBOOK_URL = `${API_BASE}/facebook`;
@@ -311,6 +312,7 @@ export default {
     const userId = `${from}:facebook`;
 
     let tempPath = null;
+    let downloadCharge = null;
 
     const until = cooldowns.get(userId);
     if (until && until > Date.now()) {
@@ -332,6 +334,15 @@ export default {
           text: "Uso: .facebook <link publico de Facebook> o responde a un mensaje con el link",
           ...global.channelInfo,
         });
+      }
+
+      downloadCharge = await chargeDownloadRequest(ctx, {
+        feature: "facebook",
+        videoUrl,
+      });
+      if (!downloadCharge.ok) {
+        cooldowns.delete(userId);
+        return;
       }
 
       await sock.sendMessage(
@@ -377,6 +388,10 @@ export default {
       });
     } catch (error) {
       console.error("FACEBOOK ERROR:", error?.message || error);
+      refundDownloadCharge(ctx, downloadCharge, {
+        feature: "facebook",
+        error: String(error?.message || error || "unknown_error"),
+      });
 
       await sock.sendMessage(from, {
         text: String(error?.message || "No se pudo procesar el video de Facebook."),

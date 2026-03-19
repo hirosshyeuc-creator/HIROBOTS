@@ -5,6 +5,7 @@ import { pipeline } from "stream/promises";
 import { spawn } from "child_process";
 import { buildDvyerUrl, getDvyerBaseUrl } from "../../lib/api-manager.js";
 import { getDownloadCache, setDownloadCache, withInflightDedup } from "../../lib/download-cache.js";
+import { chargeDownloadRequest, refundDownloadCharge } from "../economia/download-access.js";
 
 const API_AUDIO_PATH = "/ytdlmp3";
 const API_AUDIO_LEGACY_PATH = "/ytmp3";
@@ -587,6 +588,7 @@ export default {
 
     let sourceFile = null;
     let finalMp3 = null;
+    let downloadCharge = null;
 
     const until = cooldowns.get(userId);
     if (until && until > Date.now()) {
@@ -626,6 +628,16 @@ export default {
         videoUrl = search.videoUrl;
         title = search.title;
         thumbnail = search.thumbnail;
+      }
+
+      downloadCharge = await chargeDownloadRequest(ctx, {
+        feature: "ytmp3",
+        title,
+        videoUrl,
+      });
+      if (!downloadCharge.ok) {
+        cooldowns.delete(userId);
+        return;
       }
 
       await sock.sendMessage(
@@ -696,6 +708,10 @@ export default {
       });
     } catch (err) {
       console.error("YTMP3 ERROR:", err?.message || err);
+      refundDownloadCharge(ctx, downloadCharge, {
+        feature: "ytmp3",
+        error: String(err?.message || err || "unknown_error"),
+      });
       cooldowns.delete(userId);
 
       await sock.sendMessage(from, {

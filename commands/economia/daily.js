@@ -3,9 +3,9 @@ import { formatDuration } from "../sistema/_shared.js";
 
 export default {
   name: "daily",
-  command: ["daily", "coinsdaily", "reclamarcoins"],
+  command: ["daily", "coinsdaily", "reclamarcoins", "reclamardolares"],
   category: "economia",
-  description: "Reclama tu recompensa diaria",
+  description: "Reclama tu recompensa diaria en dolares",
 
   run: async ({ sock, msg, from, sender, settings }) => {
     const result = claimDaily(sender);
@@ -14,13 +14,13 @@ export default {
     if (!result.ok) {
       return sock.sendMessage(
         from,
-        {
-          text:
-            `*DAILY EN COOLDOWN*\n\n` +
-            `Podras reclamar de nuevo en *${formatDuration(result.remainingMs)}*.\n` +
-            `Mientras tanto revisa tu saldo con *${prefix}coins*.`,
-          ...global.channelInfo,
-        },
+      {
+        text:
+          `*DAILY EN COOLDOWN*\n\n` +
+          `Podras reclamar de nuevo en *${formatDuration(result.remainingMs)}*.\n` +
+          `Mientras tanto revisa tu saldo con *${prefix}coins*.`,
+        ...global.channelInfo,
+      },
         { quoted: msg }
       );
     }
@@ -31,7 +31,7 @@ export default {
         text:
           `*DAILY RECLAMADO*\n\n` +
           `Ganaste *${formatCoins(result.amount)}*.\n` +
-          `Usa *.shop* para ver la tienda.`,
+          `Usa *${prefix}shop* para ver la tienda.`,
         ...global.channelInfo,
       },
       { quoted: msg }
