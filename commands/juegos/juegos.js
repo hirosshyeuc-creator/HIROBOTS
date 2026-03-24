@@ -1,4 +1,23 @@
+import fs from "fs";
+import path from "path";
 import { getPrefix } from "./_shared.js";
+
+function buildJuegosMessage(caption) {
+  const imagePath = path.join(process.cwd(), "imagenes", "juegos.png");
+
+  if (fs.existsSync(imagePath)) {
+    return {
+      image: fs.readFileSync(imagePath),
+      caption,
+      ...global.channelInfo,
+    };
+  }
+
+  return {
+    text: caption,
+    ...global.channelInfo,
+  };
+}
 
 export default {
   name: "juegos",
@@ -11,9 +30,8 @@ export default {
 
     return sock.sendMessage(
       from,
-      {
-        text:
-          `*JUEGOS BOT*\n\n` +
+      buildJuegosMessage(
+        `*JUEGOS BOT*\n\n` +
           `Disponibles:\n` +
           `- ${prefix}ppt piedra\n` +
           `- ${prefix}adivina\n` +
@@ -30,9 +48,8 @@ export default {
           `- ${prefix}topjuegos grupo trivia\n` +
           `- ${prefix}perfilgame\n\n` +
           `Control:\n` +
-          `- ${prefix}salirjuego`,
-        ...global.channelInfo,
-      },
+          `- ${prefix}salirjuego`
+      ),
       { quoted: msg }
     );
   },

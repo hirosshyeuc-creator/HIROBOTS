@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import {
   depositCoins,
   formatCoins,
@@ -5,6 +7,23 @@ import {
   getPrefix,
   withdrawCoins,
 } from "./_shared.js";
+
+function buildBancoMessage(caption) {
+  const imagePath = path.join(process.cwd(), "imagenes", "banco.png");
+
+  if (fs.existsSync(imagePath)) {
+    return {
+      image: fs.readFileSync(imagePath),
+      caption,
+      ...global.channelInfo,
+    };
+  }
+
+  return {
+    text: caption,
+    ...global.channelInfo,
+  };
+}
 
 export default {
   name: "banco",
@@ -52,15 +71,13 @@ export default {
     const profile = getEconomyProfile(sender);
     return sock.sendMessage(
       from,
-      {
-        text:
-          `*BANCO*\n\n` +
+      buildBancoMessage(
+        `*BANCO*\n\n` +
           `Billetera: *${formatCoins(profile.coins)}*\n` +
           `Banco: *${formatCoins(profile.bank)}*\n\n` +
           `${prefix}banco depositar 500\n` +
-          `${prefix}banco retirar 200`,
-        ...global.channelInfo,
-      },
+          `${prefix}banco retirar 200`
+      ),
       { quoted: msg }
     );
   },
