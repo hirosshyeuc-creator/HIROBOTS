@@ -1,3 +1,19 @@
+
+<p align="center">
+  <a href="https://chat.whatsapp.com/GuLWXlFUdy3BJA9OXcc1Hj" target="_blank">
+    <img src="https://img.shields.io/badge/Entrar%20a%20la%20Comunidad-25D366?style=for-the-badge&logo=whatsapp&logoColor=white" alt="Entrar a la Comunidad" />
+  </a>
+  <a href="https://chat.whatsapp.com/KlZkjuAparjBga0ZJdhuHM?mode=gi_t" target="_blank">
+    <img src="https://img.shields.io/badge/Quiero%20Ser%20Bot%20Gratis-128C7E?style=for-the-badge&logo=whatsapp&logoColor=white" alt="Quiero Ser Bot Gratis" />
+  </a>
+  <a href="https://chat.whatsapp.com/HARewZpP3KSDTFMLLiDQnl?mode=gi_t" target="_blank">
+    <img src="https://img.shields.io/badge/Unirme%20al%20Grupo-1EBEA5?style=for-the-badge&logo=whatsapp&logoColor=white" alt="Unirme al Grupo" />
+  </a>
+</p>
+
+
+
+
 <p align="center">
   <img src="assets/profile/fsociety-bot-profile.png" alt="FSociety Bot" width="150" />
 </p>
