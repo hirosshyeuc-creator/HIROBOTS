@@ -42,10 +42,25 @@ function normalizeRegion(value = "") {
 }
 
 function buildTikTokPublicUrl(item = {}) {
+  const explicitUrl = String(item?.publicUrl || item?.url || "").trim();
+  if (/^https?:\/\/(?:www\.)?(?:m\.)?tiktok\.com\//i.test(explicitUrl)) {
+    return explicitUrl;
+  }
+
   const author = String(item?.author || "").replace(/^@/, "").trim();
   const id = String(item?.id || "").trim();
   if (!author || !id) return "";
   return `https://www.tiktok.com/@${author}/video/${id}`;
+}
+
+function buildTikTokCommandId(prefix, item) {
+  const publicUrl = buildTikTokPublicUrl(item);
+  const fallbackUrl = String(item?.play || "").trim();
+  const targetUrl = publicUrl || fallbackUrl;
+  if (!targetUrl) {
+    return `${prefix}tiktok`;
+  }
+  return `${prefix}tiktok ${targetUrl}`.trim();
 }
 
 function buildResultRows(results, prefix) {
@@ -53,13 +68,12 @@ function buildResultRows(results, prefix) {
     const title = clipText(item?.title || "Video TikTok", 70);
     const author = String(item?.author || "usuario").replace(/^@/, "");
     const views = compactNumber(item?.stats?.views || 0);
-    const play = String(item?.play || "").trim();
 
     return {
       header: `${index + 1}`,
       title,
       description: clipText(`@${author} | 👁️ ${views}`, 72),
-      id: `${prefix}tiktok ${play}`,
+      id: buildTikTokCommandId(prefix, item),
     };
   });
 }
@@ -74,9 +88,7 @@ function buildSections(results, prefix) {
 }
 
 function buildCardButtons(item, prefix) {
-  const play = String(item?.play || "").trim();
-  const publicUrl = buildTikTokPublicUrl(item) || play;
-  const copyCode = play ? `${prefix}tiktok ${play}` : publicUrl;
+  const copyCode = buildTikTokCommandId(prefix, item);
 
   return [
     {
