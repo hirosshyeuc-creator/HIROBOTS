@@ -88,6 +88,7 @@ const BOT_DEGRADED_SOCKET_STALE_MS = 90 * 1000;
 const SECONDARY_BOT_START_DELAY_MS = 2500;
 const FATAL_ERROR_WINDOW_MS = 2 * 60 * 1000;
 const FATAL_ERROR_THRESHOLD = 3;
+const RECONNECT_JITTER_RATIO = 0.2;
 const logger = pino({ level: "silent" });
 const FIXED_BROWSER = ["Windows", "Chrome", "114.0.5735.198"];
 
@@ -1719,6 +1720,50 @@ function shouldIgnoreError(value) {
   );
 }
 
+function normalizeRuntimeErrorText(value) {
+  if (value instanceof Error) {
+    return String(
+      `${value.message || ""} ${value.stack || ""} ${value.name || ""}`
+    )
+      .trim()
+      .toLowerCase();
+  }
+
+  if (typeof value === "object" && value) {
+    try {
+      return JSON.stringify(value).toLowerCase();
+    } catch {}
+  }
+
+  return String(value || "").trim().toLowerCase();
+}
+
+function isTransientRuntimeError(value) {
+  const txt = normalizeRuntimeErrorText(value);
+  if (!txt) return false;
+
+  const transientTokens = [
+    "timeout",
+    "timed out",
+    "etimedout",
+    "econnreset",
+    "socket hang up",
+    "eai_again",
+    "enotfound",
+    "network error",
+    "connection closed",
+    "stream error",
+    "service unavailable",
+    "temporarily unavailable",
+    "websocket is not open",
+    "device sent no auth",
+    "not-authorized",
+    "conflict",
+  ];
+
+  return transientTokens.some((token) => txt.includes(token));
+}
+
 const log = console.log;
 const warn = console.warn;
 const error = console.error;
@@ -1744,6 +1789,14 @@ console.error = (...args) => {
 const fatalRuntimeErrors = [];
 
 function recordFatalRuntimeError(kind, payload) {
+  if (isTransientRuntimeError(payload)) {
+    console.warn(
+      `[FATAL_GUARD] ${kind} transitorio detectado. No reinicio global.`,
+      payload
+    );
+    return;
+  }
+
   const now = Date.now();
   fatalRuntimeErrors.push(now);
 
@@ -2214,15 +2267,27 @@ function isPersistedReplacementBlocked(botId) {
   return Boolean(blockedUntil && Date.now() < blockedUntil);
 }
 
+function applyReconnectJitter(baseDelayMs = 0) {
+  const base = Math.max(1000, Number(baseDelayMs || 0));
+  const spread = Math.max(0, Math.floor(base * RECONNECT_JITTER_RATIO));
+
+  if (spread <= 0) {
+    return base;
+  }
+
+  const offset = Math.floor(Math.random() * (spread * 2 + 1)) - spread;
+  return Math.max(1000, base + offset);
+}
+
 function getReconnectDelay(botState, loggedOut = false) {
   if (loggedOut) {
     botState.reconnectAttempts = 0;
-    return 4000;
+    return applyReconnectJitter(4000);
   }
 
   const attempts = Math.max(1, Math.min(8, Number(botState?.reconnectAttempts || 0) + 1));
   botState.reconnectAttempts = attempts;
-  return Math.min(30_000, 2500 * 2 ** (attempts - 1));
+  return applyReconnectJitter(Math.min(30_000, 2500 * 2 ** (attempts - 1)));
 }
 
 function getDisconnectReasonText(lastDisconnect = null) {
@@ -3413,7 +3478,16 @@ function scheduleReconnect(botState, ms = 2500) {
   markBotSocketActivity(botState, "reconnecting");
   botState.reconnectTimer = setTimeout(() => {
     botState.reconnectTimer = null;
-    iniciarInstanciaBot(botState.config);
+    Promise.resolve(iniciarInstanciaBot(botState.config)).catch((error) => {
+      console.error(
+        `${getBotTag(botState)} Error en reconexion programada:`,
+        error?.message || error
+      );
+
+      if (shouldManagedProcessStartBot(botState.config) && !isReplacementBlocked(botState)) {
+        scheduleReconnect(botState, getReconnectDelay(botState, false));
+      }
+    });
   }, ms);
   botState.reconnectTimer.unref?.();
 }
