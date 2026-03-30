@@ -70,7 +70,10 @@ const MAX_SUBBOT_SLOTS = 50;
 const PAIRING_CODE_CACHE_MS = 60_000;
 const PROCESS_RESTART_DELAY_MS = 3000;
 const SETTINGS_SYNC_INTERVAL_MS = 4000;
-const BOT_RUNTIME_STATE_TTL_MS = 20_000;
+const BOT_RUNTIME_STATE_TTL_MS = Math.max(
+  60_000,
+  parseNumberEnv("BOT_RUNTIME_STATE_TTL_MS", 120_000) || 120_000
+);
 const REMOTE_PAIRING_WAIT_MS = 18_000;
 const PANEL_SUBBOT_CALLBACK_WAIT_MS = 90_000;
 const PANEL_SUBBOT_CALLBACK_POLL_MS = 4_000;
@@ -5530,6 +5533,8 @@ function runBotHealthChecks() {
         scheduleReconnect(botState, getReconnectDelay(botState, false));
       }
     }
+
+    writePersistedBotRuntimeState(botState);
   }
 }
 
