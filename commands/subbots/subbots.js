@@ -77,49 +77,54 @@ function buildOwnerInteractiveSections(bots = [], prefix = ".") {
     .sort((a, b) => Number(a.slot || 0) - Number(b.slot || 0))
     .slice(0, 24);
 
-  const detailsRows = managed.map((bot) => ({
-    header: `${bot.slot}`,
-    title: `${bot.label || `SUBBOT${bot.slot}`} | ${bot.displayName}`.slice(0, 72),
-    description: `Estado: ${bot.connected ? "conectado" : bot.connecting ? "conectando" : bot.pairingPending ? "esperando codigo" : bot.registered ? "vinculado" : "reservado"}`.slice(0, 72),
-    id: `${prefix}subbot info ${bot.slot}`,
-  }));
+  const slotRows = managed.map((bot) => {
+    const assignedNumber = normalizeNumber(bot.configuredNumber || bot.requesterNumber || "");
+    const state = bot.connected
+      ? "conectado"
+      : bot.connecting
+        ? "conectando"
+        : bot.pairingPending
+          ? "esperando codigo"
+          : bot.registered
+            ? "vinculado"
+            : "reservado";
 
-  const reconnectRows = managed.map((bot) => ({
-    header: `${bot.slot}`,
-    title: `Reconectar ${bot.label || `SUBBOT${bot.slot}`}`.slice(0, 72),
-    description: "Reconexion limpia sin borrar sesion".slice(0, 72),
-    id: `${prefix}subbot reconectar ${bot.slot}`,
-  }));
+    return {
+      header: `${bot.slot}`,
+      title: `${bot.label || `SUBBOT${bot.slot}`} | ${bot.displayName}`.slice(0, 72),
+      description: `Nro: ${assignedNumber || "sin numero"} | ${state}`.slice(0, 72),
+      id: `${prefix}subbot menu ${bot.slot}`,
+    };
+  });
 
-  const releaseRows = managed.map((bot) => ({
-    header: `${bot.slot}`,
-    title: `Liberar ${bot.label || `SUBBOT${bot.slot}`}`.slice(0, 72),
-    description: "Quitar slot y borrar sesion del subbot".slice(0, 72),
-    id: `${prefix}subbot liberar ${bot.slot}`,
-  }));
+  const globalRows = [
+    {
+      header: "GLOBAL",
+      title: "Apagar solicitudes",
+      description: "Nadie podra pedir subbot hasta activar".slice(0, 72),
+      id: `${prefix}subbotoff`,
+    },
+    {
+      header: "GLOBAL",
+      title: "Encender solicitudes",
+      description: "Permitir solicitudes publicas de subbot".slice(0, 72),
+      id: `${prefix}subboton`,
+    },
+  ];
 
   const sections = [];
 
-  if (detailsRows.length) {
+  if (slotRows.length) {
     sections.push({
-      title: "Ver detalle de slot",
-      rows: detailsRows,
+      title: "Selecciona numero/slot",
+      rows: slotRows,
     });
   }
 
-  if (reconnectRows.length) {
-    sections.push({
-      title: "Reconectar subbot",
-      rows: reconnectRows,
-    });
-  }
-
-  if (releaseRows.length) {
-    sections.push({
-      title: "Quitar/Liberar subbot",
-      rows: releaseRows,
-    });
-  }
+  sections.push({
+    title: "Control global owner",
+    rows: globalRows,
+  });
 
   return sections;
 }
@@ -217,7 +222,8 @@ export default {
               text:
                 `Panel owner de subbots.\n` +
                 `Conectados: *${activeCount}* | Vinculados: *${linkedCount}* | En espera: *${waitingCount}*\n` +
-                `Vista: ${chatStatus}`,
+                `Vista: ${chatStatus}\n` +
+                `Toca un numero/slot para abrir su menu privado.`,
               title: "SUBBOTS OWNER",
               subtitle: "Gestion privada",
               footer: "FSOCIETY BOT",
@@ -254,9 +260,11 @@ export default {
             `Hora: ${formatDateTime(Date.now())}\n\n` +
             `${ownerLines.join("\n\n")}\n\n` +
             `Atajos owner\n` +
+            `- ${prefix}subbot menu 3\n` +
             `- ${prefix}subbot reconectar 3\n` +
             `- ${prefix}subbot liberar 3\n` +
-            `- ${prefix}subbot info 3`,
+            `- ${prefix}subbot info 3\n` +
+            `- ${prefix}subbotoff / ${prefix}subboton`,
           ...global.channelInfo,
         },
         quoted
@@ -286,6 +294,7 @@ export default {
           `- ${prefix}subbot 519xxxxxxxxx\n` +
           `- ${prefix}subbot 3 519xxxxxxxxx\n` +
           `- ${prefix}subbots owner\n` +
+          `- ${prefix}subbot menu 3\n` +
           `- ${prefix}subbot info 3\n` +
           `- ${prefix}subbot liberar 3\n` +
           `- ${prefix}subbot reset 3\n` +

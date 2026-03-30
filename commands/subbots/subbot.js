@@ -167,6 +167,92 @@ async function sendSubbotRequestMenu({
   }
 }
 
+async function sendOwnerSlotMenu({
+  sock,
+  from,
+  quoted,
+  prefix,
+  slot,
+  bot,
+  chatStatus,
+  publicRequests,
+}) {
+  const sections = [
+    {
+      title: `Gestion del slot ${slot}`,
+      rows: [
+        {
+          header: "SLOT",
+          title: `Info slot ${slot}`,
+          description: "Ver estado completo y datos".slice(0, 72),
+          id: `${prefix}subbot info ${slot}`,
+        },
+        {
+          header: "SLOT",
+          title: `Reconectar slot ${slot}`,
+          description: "Reconecta sin borrar sesion".slice(0, 72),
+          id: `${prefix}subbot reconectar ${slot}`,
+        },
+        {
+          header: "SLOT",
+          title: `Liberar slot ${slot}`,
+          description: "Quitar subbot y liberar espacio".slice(0, 72),
+          id: `${prefix}subbot liberar ${slot}`,
+        },
+        {
+          header: "SLOT",
+          title: `Reset slot ${slot}`,
+          description: "Borrar sesion y reiniciar slot".slice(0, 72),
+          id: `${prefix}subbot reset ${slot}`,
+        },
+      ],
+    },
+    {
+      title: "Control global",
+      rows: [
+        {
+          header: "GLOBAL",
+          title: publicRequests ? "Apagar solicitudes" : "Encender solicitudes",
+          description: publicRequests
+            ? "Nadie podra pedir subbot hasta activarlo."
+            : "Permitir que vuelvan a pedir subbot.",
+          id: publicRequests ? `${prefix}subbotoff` : `${prefix}subboton`,
+        },
+        {
+          header: "GLOBAL",
+          title: "Volver panel owner",
+          description: "Ver todos los subbots con datos".slice(0, 72),
+          id: `${prefix}subbots owner`,
+        },
+      ],
+    },
+  ];
+
+  return sock.sendMessage(
+    from,
+    {
+      text:
+        `Panel del slot ${slot}.\n` +
+        `Selecciona una accion owner.\n` +
+        `En este chat: ${chatStatus}`,
+      title: "SUBBOT OWNER",
+      subtitle: `Slot ${slot} | ${bot?.displayName || "Subbot"}`,
+      footer: "FSOCIETY BOT",
+      interactiveButtons: [
+        {
+          name: "single_select",
+          buttonParamsJson: JSON.stringify({
+            title: `Opciones slot ${slot}`,
+            sections,
+          }),
+        },
+      ],
+      ...global.channelInfo,
+    },
+    quoted
+  );
+}
+
 export default {
   name: "subbot",
   command: ["subbot", "code", "subbotcode", "codesubbot"],
@@ -203,6 +289,74 @@ export default {
     }
 
     const subbotAccess = runtime.getSubbotRequestState();
+
+    if (["menu", "panel", "gestionar", "manage"].includes(action)) {
+      if (!esOwner) {
+        return sock.sendMessage(
+          from,
+          {
+            text: "Solo el owner puede abrir el menu privado de slots.",
+            ...global.channelInfo,
+          },
+          quoted
+        );
+      }
+
+      const slot = parseSlotToken(args[1], Number(subbotAccess?.maxSlots || 15));
+      if (!slot || !runtime?.getBotSummary) {
+        return sock.sendMessage(
+          from,
+          {
+            text: `Usa: *${prefix}subbot menu 3*`,
+            ...global.channelInfo,
+          },
+          quoted
+        );
+      }
+
+      const bot = runtime.getBotSummary(`subbot${slot}`);
+      if (!bot) {
+        return sock.sendMessage(
+          from,
+          {
+            text: `No encontre el slot ${slot}.`,
+            ...global.channelInfo,
+          },
+          quoted
+        );
+      }
+
+      try {
+        await sendOwnerSlotMenu({
+          sock,
+          from,
+          quoted,
+          prefix,
+          slot,
+          bot,
+          chatStatus,
+          publicRequests: Boolean(subbotAccess?.publicRequests),
+        });
+      } catch (error) {
+        console.error("No pude enviar menu owner por slot:", error?.message || error);
+      }
+
+      return sock.sendMessage(
+        from,
+        {
+          text:
+            `*SLOT OWNER ${slot}*\n\n` +
+            `${buildSubbotCard(bot, { compact: false, showSensitive: true })}\n\n` +
+            `Atajos\n` +
+            `- ${prefix}subbot reconectar ${slot}\n` +
+            `- ${prefix}subbot liberar ${slot}\n` +
+            `- ${prefix}subbot reset ${slot}\n` +
+            `- ${prefix}subbotoff / ${prefix}subboton`,
+          ...global.channelInfo,
+        },
+        quoted
+      );
+    }
 
     if (["info", "estado"].includes(action)) {
       if (!esOwner) {
@@ -420,11 +574,13 @@ export default {
             `*${prefix}subbot 3*\n` +
             `*${prefix}subbot 519xxxxxxxxx*\n` +
             `*${prefix}subbot 3 519xxxxxxxxx*\n` +
+            `*${prefix}subbot menu 3*\n` +
             `*${prefix}subbot info 3*\n` +
             `*${prefix}subbot reconectar 3*\n` +
             `*${prefix}subbot liberar 3*\n` +
             `*${prefix}subbot reset 3*\n` +
-            `*${prefix}subbot slots 20*`,
+            `*${prefix}subbot slots 20*\n` +
+            `*${prefix}subbotoff* / *${prefix}subboton*`,
           ...global.channelInfo,
         },
         quoted
