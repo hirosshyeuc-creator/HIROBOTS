@@ -331,6 +331,41 @@ function toFriendlyAudioError(error) {
   return raw || "Error al procesar el audio.";
 }
 
+function toSafeYtmp3LogError(error) {
+  const raw = normalizeErrorText(error);
+  const lower = raw.toLowerCase();
+
+  if (
+    lower.includes("http 401") ||
+    lower.includes("unauthorized") ||
+    lower.includes("internal yt1s link error") ||
+    lower.includes("internal link error") ||
+    lower.includes("no se encontro un formato")
+  ) {
+    return "proveedor no disponible temporalmente";
+  }
+
+  if (
+    lower.includes("timeout") ||
+    lower.includes("timed out") ||
+    lower.includes("socket hang up") ||
+    lower.includes("econnreset") ||
+    lower.includes("eai_again")
+  ) {
+    return "timeout de red";
+  }
+
+  if (lower.includes("audio demasiado grande")) {
+    return "archivo demasiado grande";
+  }
+
+  if (lower.includes("audio inválido") || lower.includes("audio invalido")) {
+    return "audio invalido";
+  }
+
+  return "error controlado";
+}
+
 function extractApiError(data, status) {
   return (
     data?.detail ||
@@ -862,7 +897,9 @@ async function downloadAudioFromApiWithFallbacks(videoUrl, outputPath, options =
         throw buildAbortError(signal);
       }
 
-      console.log(`YTMP3 direct fallback ${source.sourceLabel}:`, error?.message || error);
+      console.log(
+        `YTMP3 direct fallback ${source.sourceLabel}: ${toSafeYtmp3LogError(error)}`
+      );
       errors.push(`${source.sourceLabel}: ${String(error?.message || error)}`);
     }
   }
@@ -986,7 +1023,7 @@ async function sendAudioFile(
     );
     return "audio";
   } catch (e1) {
-    console.error("send audio failed:", e1?.message || e1);
+    console.log(`YTMP3 send audio fallback -> document: ${toSafeYtmp3LogError(e1)}`);
 
     await sock.sendMessage(
       from,
@@ -1108,9 +1145,7 @@ export default {
           { signal: abortSignal }
         );
       } catch (linkError) {
-        console.log(
-          `YTMP3 link fallback: ${linkError?.message || linkError}`
-        );
+        console.log(`YTMP3 link fallback activado: ${toSafeYtmp3LogError(linkError)}`);
         downloadedAudio = await downloadAudioFromApiWithFallbacks(videoUrl, sourceFile, {
           signal: abortSignal,
         });
@@ -1128,10 +1163,7 @@ export default {
           fileNameToSend = `${title}.mp3`;
           mimeToSend = "audio/mpeg";
         } catch (convertError) {
-          console.log(
-            "YTMP3 conversion fallback:",
-            convertError?.message || convertError
-          );
+          console.log(`YTMP3 conversion fallback: ${toSafeYtmp3LogError(convertError)}`);
           forceDocument = true;
         }
       }
@@ -1146,7 +1178,7 @@ export default {
       });
     } catch (err) {
       const aborted = abortSignal?.aborted === true;
-      console.error("YTMP3 ERROR:", err?.message || err);
+      console.log(`YTMP3 fallo controlado: ${toSafeYtmp3LogError(err)}`);
       refundDownloadCharge(ctx, downloadCharge, {
         feature: "ytmp3",
         error: String(err?.message || err || "unknown_error"),
