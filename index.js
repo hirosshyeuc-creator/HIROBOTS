@@ -10,6 +10,7 @@ import dotenv from "dotenv";
 import readline from "readline";
 import fs from "fs";
 import path from "path";
+import os from "os";
 import http from "http";
 import { spawn } from "child_process";
 import { fileURLToPath, pathToFileURL } from "url";
@@ -1730,6 +1731,11 @@ const ALLOW_LOOPBACK_BRIDGE_WITHOUT_TOKEN = parseBooleanEnv(
   false
 );
 const LOG_COMMAND_LOADS = parseBooleanEnv("LOG_COMMAND_LOADS", false);
+const CONSOLE_BOOT_ANIMATION = parseBooleanEnv("CONSOLE_BOOT_ANIMATION", true);
+const CONSOLE_BOOT_FRAME_DELAY_MS = Math.max(
+  90,
+  parseNumberEnv("CONSOLE_BOOT_FRAME_DELAY_MS", 180) || 180
+);
 const DASHBOARD_AUTO_ENABLED = parseBooleanEnv("DASHBOARD_ENABLED", false);
 const DASHBOARD_AUTO_PORT = Math.max(
   1,
@@ -4746,8 +4752,161 @@ function setDashboardConfig(patch = {}) {
 
 // ================= BANNER =================
 
-function banner() {
-  console.clear();
+let packageVersionLabelCache = "";
+
+function getPackageVersionLabel() {
+  if (packageVersionLabelCache) {
+    return packageVersionLabelCache;
+  }
+
+  try {
+    const raw = fs.readFileSync(path.join(process.cwd(), "package.json"), "utf-8");
+    const parsed = JSON.parse(raw);
+    const version = String(parsed?.version || "").trim();
+    packageVersionLabelCache = version ? `v${version}` : "vdev";
+  } catch {
+    packageVersionLabelCache = "vdev";
+  }
+
+  return packageVersionLabelCache;
+}
+
+async function estimateBootLatencyMs() {
+  const baselineDelayMs = 20;
+  const start = process.hrtime.bigint();
+  await delay(baselineDelayMs);
+  const elapsedNs = Number(process.hrtime.bigint() - start);
+  const elapsedMs = Math.max(1, Math.round(elapsedNs / 1_000_000));
+  return Math.max(1, elapsedMs - baselineDelayMs);
+}
+
+function buildDashboardProgressBar(percent = 0, width = 20) {
+  const normalizedPercent = Math.max(0, Math.min(100, Number(percent || 0)));
+  const safeWidth = Math.max(8, Number(width || 20));
+  const filled = Math.round((normalizedPercent / 100) * safeWidth);
+  const remaining = Math.max(0, safeWidth - filled);
+  const soft = Math.round(remaining * 0.4);
+  const empty = Math.max(0, remaining - soft);
+  return `${"▓".repeat(filled)}${"▒".repeat(soft)}${"░".repeat(empty)}`;
+}
+
+function composeDashboardHeader(leftText = "", rightText = "", contentWidth = 80) {
+  const right = String(rightText || "");
+  const maxLeft = Math.max(1, contentWidth - right.length - 1);
+  const leftRaw = String(leftText || "");
+  const left = leftRaw.length > maxLeft ? `${leftRaw.slice(0, Math.max(1, maxLeft - 1))}…` : leftRaw;
+  const spacer = " ".repeat(Math.max(1, contentWidth - left.length - right.length));
+  return `${left}${spacer}${right}`;
+}
+
+function buildDashboardFrame(params = {}) {
+  const {
+    bodyWidth = 98,
+    botName = "FSOCIETY BOT",
+    onlinePulse = "●",
+    ownerName = "OWNER",
+    prefixValue = ".",
+    commandCount = 0,
+    processLabel = "UNICO",
+    managedLabels = "MAIN",
+    activeConfigLabels = "MAIN",
+    sessionLabel = "main",
+    versionLabel = "vdev",
+    modules = [],
+    telemetry = { cpuPct: 0, ramPct: 0, netPct: 0, latencyMs: 0, usedRamGb: 0, totalRamGb: 0 },
+    activityLogs = [],
+    bootReady = false,
+  } = params;
+
+  const contentWidth = Math.max(72, bodyWidth - 2);
+  const systemTitle = `${String(botName || "FSOCIETY BOT").trim().toUpperCase()} : COMMAND DASHBOARD`;
+  const lines = [];
+  const row = (text = "") => {
+    const clipped = String(text || "").slice(0, contentWidth);
+    lines.push(`┃${clipped.padEnd(contentWidth, " ")}┃`);
+  };
+  const emptyRow = () => row("");
+  const buildSolidBar = (percent = 0, width = 20, emptyChar = "░") => {
+    const normalizedPercent = Math.max(0, Math.min(100, Number(percent || 0)));
+    const safeWidth = Math.max(8, Number(width || 20));
+    const filled = Math.round((normalizedPercent / 100) * safeWidth);
+    return `${"█".repeat(filled)}${emptyChar.repeat(Math.max(0, safeWidth - filled))}`;
+  };
+  const addSection = (title, sectionLines) => {
+    const inset = 3;
+    const topPrefix = `${" ".repeat(inset)}╭─ ${title} `;
+    const topFill = Math.max(0, contentWidth - topPrefix.length - 1);
+    row(`${topPrefix}${"─".repeat(topFill)}╮`);
+
+    const bodyPrefix = `${" ".repeat(inset)}│  `;
+    const bodyWidth = Math.max(10, contentWidth - bodyPrefix.length - 1);
+    for (const line of sectionLines) {
+      const safe = String(line || "").slice(0, bodyWidth);
+      row(`${bodyPrefix}${safe.padEnd(bodyWidth, " ")}│`);
+    }
+
+    const bottomPrefix = `${" ".repeat(inset)}╰`;
+    const bottomFill = Math.max(0, contentWidth - bottomPrefix.length - 1);
+    row(`${bottomPrefix}${"─".repeat(bottomFill)}╯`);
+  };
+  const compactProcess = String(processLabel || "STABLE")
+    .replaceAll("_", " ")
+    .trim()
+    .toUpperCase();
+  const moduleLines = modules.slice(0, 3).map((item) => {
+    const moduleName = String(item?.name || "MODULE").toUpperCase().padEnd(12, " ");
+    const statusLabel = item.percent >= 95 ? "◆ ACTIVE " : item.percent >= 70 ? "◇ STABLE " : "◇ WARNING";
+    return `${moduleName} ${statusLabel} ${buildSolidBar(item.percent, 20, "░")}`;
+  });
+  while (moduleLines.length < 3) {
+    moduleLines.push(`${"MODULE".padEnd(12, " ")} ◇ WARNING ${buildSolidBar(35, 20, "░")}`);
+  }
+  const eventLines = activityLogs.length
+    ? activityLogs.slice(-4).map((line) => `➤ ${String(line || "").replace(/^[✓↻]\s*/u, "")}`)
+    : ["➤ Core initialized", "➤ Module scan complete", "➤ Connections established", "➤ Fallback mode enabled"];
+  const netPct = Math.max(1, Math.min(99, Number(telemetry.netPct || 0)));
+
+  lines.push(`┏${"━".repeat(contentWidth)}┓`);
+  row(
+    composeDashboardHeader(
+      `  ⟦ ${systemTitle} ⟧`,
+      `${onlinePulse} ACTIVE`,
+      contentWidth
+    )
+  );
+  lines.push(`┣${"━".repeat(contentWidth)}┫`);
+  emptyRow();
+
+  addSection("OPERATOR INFO", [
+    `◉ Name        ${ownerName.toUpperCase()}`,
+    `◉ Prefix      ${prefixValue}`,
+    `◉ Commands    ${commandCount}`,
+    `◉ Runtime     ${compactProcess}`,
+    `◉ Session     ${sessionLabel}`,
+    `◉ Version     ${versionLabel}`,
+  ]);
+  emptyRow();
+
+  addSection("MODULE STATUS", moduleLines);
+  emptyRow();
+
+  addSection("EVENT LOG", eventLines);
+  emptyRow();
+
+  addSection("SYSTEM METER", [
+    `CPU      ⟪ ${buildSolidBar(telemetry.cpuPct, 18, "▒")} ⟫ ${String(telemetry.cpuPct).padStart(2, " ")}%`,
+    `RAM      ⟪ ${buildSolidBar(telemetry.ramPct, 18, "▒")} ⟫ ${String(telemetry.ramPct).padStart(2, " ")}%`,
+    `NET      ⟪ ${buildSolidBar(netPct, 18, "▒")} ⟫ ${String(netPct).padStart(2, " ")}%`,
+    `Latency  ${String(telemetry.latencyMs).padStart(3, " ")} ms    Mem ${telemetry.usedRamGb.toFixed(1)}/${telemetry.totalRamGb.toFixed(1)} GB`,
+  ]);
+
+  row(bootReady ? "  System ready. Awaiting instructions." : "  Boot sequence in progress...");
+  lines.push(`┗${"━".repeat(contentWidth)}┛`);
+
+  return lines;
+}
+
+async function banner() {
   const managedLabels = getManagedProcessBotConfigs()
     .map((cfg) => cfg.label)
     .filter(Boolean)
@@ -4760,46 +4919,102 @@ function banner() {
   const prefixValue = Array.isArray(settings.prefix)
     ? settings.prefix.join(", ")
     : String(settings.prefix || ".");
-  const nowText = new Date().toLocaleString();
   const terminalWidth = Number(process.stdout?.columns || 0);
-  const bodyWidth = Math.max(78, Math.min(116, terminalWidth > 0 ? terminalWidth - 2 : 98));
+  const bodyWidth = Math.max(80, Math.min(118, terminalWidth > 0 ? terminalWidth - 2 : 100));
+  const isInteractiveTerminal = Boolean(process.stdout?.isTTY);
+  const animateBoot = CONSOLE_BOOT_ANIMATION && isInteractiveTerminal;
+  const bootSteps = animateBoot ? 5 : 1;
+  const bootDelayMs = CONSOLE_BOOT_FRAME_DELAY_MS;
+  const onlinePulseFrames = ["●", "○", "◇", "◆"];
+  const managedConfigs = getManagedProcessBotConfigs();
+  const moduleTargets = managedConfigs.slice(0, 2).map((cfg, index) => ({
+    name: String(cfg?.label || `BOT${index + 1}`),
+    target: index === 0 ? 100 : 98,
+  }));
+  moduleTargets.push({ name: "IMG ENGINE", target: 76 });
+  const bootLogSeed = [
+    "✓ Core initialized",
+    "↻ Module scan complete",
+    "✓ Connections established",
+    "↻ Fallback mode enabled",
+    "✓ Ready for command traffic",
+  ];
+  const activityLogs = [];
+  const baseLatency = await estimateBootLatencyMs();
+  const cpuCount = Math.max(1, Number(os.cpus()?.length || 1));
+  const loadAverage = Number(os.loadavg?.()[0] || 0);
+  const baseCpuPct = Math.max(2, Math.min(99, Math.round((loadAverage / cpuCount) * 100)));
+  const totalMemBytes = Math.max(1, Number(os.totalmem() || 0));
+  const usedMemBytes = Math.max(0, totalMemBytes - Number(os.freemem() || 0));
+  const baseRamPct = Math.max(2, Math.min(99, Math.round((usedMemBytes / totalMemBytes) * 100)));
+  const usedRamGb = usedMemBytes / (1024 ** 3);
+  const totalRamGb = totalMemBytes / (1024 ** 3);
 
-  const frame = {
-    top: `+${"=".repeat(bodyWidth - 2)}+`,
-    mid: `+${"-".repeat(bodyWidth - 2)}+`,
-    bottom: `+${"=".repeat(bodyWidth - 2)}+`,
-  };
+  for (let step = 1; step <= bootSteps; step += 1) {
+    const ratio = step / bootSteps;
+    while (activityLogs.length < Math.min(bootLogSeed.length, step)) {
+      activityLogs.push(bootLogSeed[activityLogs.length]);
+    }
 
-  const padLine = (text = "") => {
-    const content = String(text || "");
-    const available = Math.max(1, bodyWidth - 4);
-    const slice = content.length > available ? content.slice(0, available) : content;
-    return `| ${slice.padEnd(available, " ")} |`;
-  };
+    const modules = moduleTargets.map((module) => ({
+      ...module,
+      percent:
+        step === bootSteps
+          ? module.target
+          : Math.max(8, Math.round(module.target * ratio)),
+    }));
 
-  const printField = (label, value) => {
-    const cleanLabel = String(label || "").trim().toUpperCase().padEnd(12, " ");
-    const wrapWidth = Math.max(16, bodyWidth - 22);
-    const lines = wrapConsoleText(String(value || "-"), wrapWidth);
-    lines.forEach((line, index) => {
-      const left = index === 0 ? cleanLabel : " ".repeat(cleanLabel.length);
-      const row = padLine(`${left} ${line}`);
-      console.log(chalk.blueBright(row));
+    const telemetry = {
+      cpuPct: Math.max(1, Math.min(99, baseCpuPct + (step % 2 === 0 ? 1 : 0))),
+      ramPct: Math.max(1, Math.min(99, baseRamPct + (step % 3 === 0 ? 1 : 0))),
+      netPct: Math.max(1, Math.min(99, 100 - Math.min(90, baseLatency * 2) + (step % 2))),
+      latencyMs: Math.max(1, baseLatency + (bootSteps - step)),
+      usedRamGb,
+      totalRamGb,
+    };
+
+    const frameLines = buildDashboardFrame({
+      bodyWidth,
+      botName,
+      onlinePulse: onlinePulseFrames[(step - 1) % onlinePulseFrames.length],
+      ownerName,
+      prefixValue,
+      commandCount: comandos.size,
+      processLabel: String(PROCESS_MODE_LABEL),
+      managedLabels,
+      activeConfigLabels,
+      sessionLabel: SPLIT_PROCESS_MODE
+        ? `SPLIT:${String(PROCESS_BOT_ID || "MAIN").toUpperCase()}`
+        : "SINGLE:ALL",
+      versionLabel: getPackageVersionLabel(),
+      modules,
+      telemetry,
+      activityLogs,
+      bootReady: step === bootSteps,
     });
-  };
 
-  console.log(chalk.magentaBright(frame.top));
-  console.log(chalk.magentaBright(padLine(`FSOCIETY CYBER CONSOLE :: ${botName}`)));
-  console.log(chalk.magentaBright(padLine(`THEME=NEON-2 :: READY`)));
-  console.log(chalk.magentaBright(frame.mid));
-  printField("Owner", ownerName);
-  printField("Prefijos", prefixValue);
-  printField("Comandos", String(comandos.size));
-  printField("Proceso", String(PROCESS_MODE_LABEL));
-  printField("Maneja", managedLabels);
-  printField("Habilitados", activeConfigLabels);
-  printField("Inicio", nowText);
-  console.log(chalk.magentaBright(frame.bottom));
+    if (isInteractiveTerminal) {
+      console.clear();
+    }
+
+    for (const line of frameLines) {
+      if (/^[┏┣┗]/.test(line)) {
+        console.log(chalk.magentaBright(line));
+        continue;
+      }
+
+      if (line.includes("ONLINE")) {
+        console.log(chalk.cyanBright(line));
+        continue;
+      }
+
+      console.log(chalk.blueBright(line));
+    }
+
+    if (animateBoot && step < bootSteps) {
+      await delay(bootDelayMs);
+    }
+  }
 }
 
 // ================= CARGAR COMANDOS =================
@@ -6990,7 +7205,7 @@ async function iniciarInstanciaBot(config) {
 async function start() {
   getManagedProcessBotConfigs().forEach((config) => ensureBotState(config));
   await cargarComandos();
-  banner();
+  await banner();
   await syncManagedProcessBots();
   await syncSplitSubbotProcessPool();
   flushManagedBotRuntimeStates();
