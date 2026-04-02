@@ -704,16 +704,7 @@ async function applyConfiguredBotProfile(botState, sock) {
     }
 
     if (kind === "foto" && /no image processing library available/i.test(detail)) {
-      const now = Date.now();
-      if (now - Number(botState?.lastProfilePhotoLibWarnAt || 0) < 30 * 60 * 1000) {
-        return;
-      }
-      botState.lastProfilePhotoLibWarnAt = now;
-      logBotEvent(
-        botState,
-        "warn",
-        "Foto de perfil omitida: falta libreria de imagen en este hosting"
-      );
+      // En hosting sin libreria de imagen esta advertencia es esperada; la omitimos para evitar ruido.
       return;
     }
 
@@ -4883,7 +4874,7 @@ function buildDashboardFrame(params = {}) {
     `◉ Commands    ${commandCount}`,
     `◉ Runtime     ${compactProcess}`,
     `◉ Session     ${sessionLabel}`,
-    `◉ Version     ${versionLabel}`,
+    `◉ Build       ${versionLabel}`,
   ]);
   emptyRow();
 
@@ -4897,10 +4888,10 @@ function buildDashboardFrame(params = {}) {
     `CPU      ⟪ ${buildSolidBar(telemetry.cpuPct, 18, "▒")} ⟫ ${String(telemetry.cpuPct).padStart(2, " ")}%`,
     `RAM      ⟪ ${buildSolidBar(telemetry.ramPct, 18, "▒")} ⟫ ${String(telemetry.ramPct).padStart(2, " ")}%`,
     `NET      ⟪ ${buildSolidBar(netPct, 18, "▒")} ⟫ ${String(netPct).padStart(2, " ")}%`,
-    `Latency  ${String(telemetry.latencyMs).padStart(3, " ")} ms    Mem ${telemetry.usedRamGb.toFixed(1)}/${telemetry.totalRamGb.toFixed(1)} GB`,
+    `LATENCY  ${String(telemetry.latencyMs).padStart(3, " ")} ms    MEM ${telemetry.usedRamGb.toFixed(1)}/${telemetry.totalRamGb.toFixed(1)} GB`,
   ]);
 
-  row(bootReady ? "  System ready. Awaiting instructions." : "  Boot sequence in progress...");
+  row(bootReady ? "  SISTEMA LISTO Y EN ESPERA DE INSTRUCCIONES." : "  SECUENCIA DE ARRANQUE EN PROGRESO...");
   lines.push(`┗${"━".repeat(contentWidth)}┛`);
 
   return lines;
@@ -5807,6 +5798,9 @@ function logManagedStopDecision(botState, config, decision) {
   }
 
   const reason = String(decision.reason || "unknown");
+  if (["secondary_missing_session", "waiting_session_or_main"].includes(reason)) {
+    return;
+  }
   const now = Date.now();
 
   if (
@@ -5859,7 +5853,9 @@ function stopLocalManagedBot(botState, reason = "disabled") {
   botState.contactNameCache?.clear?.();
   botState.recentMessageIds?.clear?.();
   botState.activeDownloadJobs?.clear?.();
-  logBotEvent(botState, "warn", `Detenido localmente (${reason})`);
+  if (reason !== "esperando_sesion") {
+    logBotEvent(botState, "warn", `Detenido localmente (${reason})`);
+  }
   writePersistedBotRuntimeState(botState);
 }
 
