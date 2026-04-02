@@ -2038,27 +2038,64 @@ function formatLogTime(timestamp = Date.now()) {
   return `${hh}:${mm}:${ss}`;
 }
 
+function wrapConsoleText(value = "", maxWidth = 72) {
+  const source = String(value || "").trim();
+  if (!source) {
+    return ["-"];
+  }
+
+  const lines = [];
+  let remaining = source;
+
+  while (remaining.length > maxWidth) {
+    let cutAt = remaining.lastIndexOf(" ", maxWidth);
+    if (cutAt < Math.floor(maxWidth * 0.55)) {
+      cutAt = maxWidth;
+    }
+
+    lines.push(remaining.slice(0, cutAt).trim());
+    remaining = remaining.slice(cutAt).trim();
+  }
+
+  if (remaining) {
+    lines.push(remaining);
+  }
+
+  return lines.length ? lines : ["-"];
+}
+
 function logBotEvent(value, level = "info", message = "") {
-  const line = `${chalk.gray(`[${formatLogTime()}]`)} ${getBotTag(value)} ${String(
+  const config = value?.config || value || {};
+  const tag = String(config?.label || "BOT")
+    .trim()
+    .toUpperCase()
+    .padEnd(8, " ")
+    .slice(0, 8);
+  const levelLabel = String(level || "info")
+    .trim()
+    .toUpperCase()
+    .padEnd(7, " ")
+    .slice(0, 7);
+  const baseLine = `${chalk.gray(formatLogTime())} ${chalk.white(tag)} ${chalk.gray(levelLabel)} ${String(
     message || ""
   ).trim()}`;
 
   if (level === "error") {
-    console.log(chalk.redBright(line));
+    console.log(chalk.redBright(baseLine));
     return;
   }
 
   if (level === "warn") {
-    console.log(chalk.yellowBright(line));
+    console.log(chalk.yellowBright(baseLine));
     return;
   }
 
   if (level === "success") {
-    console.log(chalk.greenBright(line));
+    console.log(chalk.greenBright(baseLine));
     return;
   }
 
-  console.log(chalk.cyanBright(line));
+  console.log(chalk.cyanBright(baseLine));
 }
 
 function createStoreForBot(botId) {
@@ -4704,45 +4741,32 @@ function banner() {
   const prefixValue = Array.isArray(settings.prefix)
     ? settings.prefix.join(", ")
     : String(settings.prefix || ".");
+  const bodyWidth = 84;
+  const border = "=".repeat(bodyWidth);
+  const section = "-".repeat(bodyWidth);
 
-  console.log(chalk.cyanBright("┌──────────────────────────────────────────────────────────┐"));
-  console.log(
-    chalk.cyanBright(
-      `│ ${botName.padEnd(56, " ").slice(0, 56)} │`
-    )
-  );
-  console.log(chalk.cyanBright("├──────────────────────────────────────────────────────────┤"));
-  console.log(
-    chalk.white(
-      `│ Owner: ${ownerName.padEnd(49, " ").slice(0, 49)} │`
-    )
-  );
-  console.log(
-    chalk.white(
-      `│ Prefijos: ${prefixValue.padEnd(46, " ").slice(0, 46)} │`
-    )
-  );
-  console.log(
-    chalk.white(
-      `│ Comandos: ${String(comandos.size).padEnd(46, " ").slice(0, 46)} │`
-    )
-  );
-  console.log(
-    chalk.white(
-      `│ Proceso: ${String(PROCESS_MODE_LABEL).padEnd(47, " ").slice(0, 47)} │`
-    )
-  );
-  console.log(
-    chalk.white(
-      `│ Maneja: ${managedLabels.padEnd(48, " ").slice(0, 48)} │`
-    )
-  );
-  console.log(
-    chalk.white(
-      `│ Habilitados: ${activeConfigLabels.padEnd(43, " ").slice(0, 43)} │`
-    )
-  );
-  console.log(chalk.cyanBright("└──────────────────────────────────────────────────────────┘"));
+  const printField = (label, value) => {
+    const cleanLabel = String(label || "").trim();
+    const prefix = `${cleanLabel}: `;
+    const wrapWidth = Math.max(20, bodyWidth - prefix.length);
+    const lines = wrapConsoleText(value, wrapWidth);
+
+    lines.forEach((line, index) => {
+      const head = index === 0 ? prefix : " ".repeat(prefix.length);
+      console.log(chalk.white(`${head}${line}`));
+    });
+  };
+
+  console.log(chalk.cyanBright(border));
+  console.log(chalk.cyanBright(`FSOCIETY CONSOLE  |  ${botName}`));
+  console.log(chalk.cyanBright(section));
+  printField("Owner", ownerName);
+  printField("Prefijos", prefixValue);
+  printField("Comandos", String(comandos.size));
+  printField("Proceso", String(PROCESS_MODE_LABEL));
+  printField("Maneja", managedLabels);
+  printField("Habilitados", activeConfigLabels);
+  console.log(chalk.cyanBright(border));
 }
 
 // ================= CARGAR COMANDOS =================
