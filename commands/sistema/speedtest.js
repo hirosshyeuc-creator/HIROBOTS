@@ -332,7 +332,6 @@ async function fetchTraceInfo() {
       info[String(key).trim()] = String(value).trim();
     }
     return {
-      ip: info.ip || "",
       loc: info.loc || "",
       colo: info.colo || "",
       warp: info.warp || "",
@@ -372,7 +371,10 @@ function buildSvgReport(result, meta) {
   const dlSource = result?.download?.provider ? `DL: ${result.download.provider}` : "DL: ?";
   const ulSource = result?.upload?.provider ? `UL: ${result.upload.provider}` : "UL: ?";
   const subtitle = `Fuente: ${dlSource} | ${ulSource}`;
-  const ipLine = meta?.ip ? `IP: ${meta.ip}  COLO: ${meta.colo || "?"}  LOC: ${meta.loc || "?"}` : "";
+  const netLine =
+    meta?.colo || meta?.loc
+      ? `COLO: ${meta?.colo || "?"}  LOC: ${meta?.loc || "?"}  WARP: ${meta?.warp || "?"}`
+      : "";
   const hostLine = `Host: ${os.hostname()}  OS: ${os.platform()} ${os.release()}`;
   const timeLine = `Hora: ${new Date(result?.finishedAt || Date.now()).toLocaleString("es-PE")}`;
 
@@ -423,7 +425,7 @@ function buildSvgReport(result, meta) {
   <g>
     <text x="48" y="146" fill="${muted}" font-size="14" font-family="DejaVu Sans, Arial, sans-serif">${hostLine}</text>
     <text x="48" y="168" fill="${muted}" font-size="14" font-family="DejaVu Sans, Arial, sans-serif">${timeLine}</text>
-    ${ipLine ? `<text x="48" y="190" fill="${muted}" font-size="14" font-family="DejaVu Sans, Arial, sans-serif">${ipLine}</text>` : ""}
+    ${netLine ? `<text x="48" y="190" fill="${muted}" font-size="14" font-family="DejaVu Sans, Arial, sans-serif">${netLine}</text>` : ""}
   </g>
 
   <g transform="translate(48, 226)">
