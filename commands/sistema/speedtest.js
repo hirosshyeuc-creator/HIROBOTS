@@ -361,7 +361,18 @@ async function executeSpeedtest(options = {}) {
   };
 }
 
-function buildResultMessage(result, modeLabel = "NORMAL") {
+function buildOwnerContact(settings = {}) {
+  const ownerName = String(settings.ownerName || "DVYER").trim();
+  const ownerNumber =
+    Array.isArray(settings.ownerNumbers) && settings.ownerNumbers.length
+      ? String(settings.ownerNumbers[0]).trim()
+      : String(settings.ownerNumber || settings.ownerPhone || "").trim();
+
+  if (ownerNumber) return `${ownerName} · ${ownerNumber}`;
+  return ownerName;
+}
+
+function buildResultMessage(result, modeLabel = "NORMAL", contactText = "") {
   const totalTimeMs = Math.max(0, Number(result?.finishedAt || 0) - Number(result?.startedAt || 0));
 
   const dlOk = result?.download?.ok !== false;
@@ -381,33 +392,31 @@ function buildResultMessage(result, modeLabel = "NORMAL") {
   const sources = `DL: ${result?.download?.provider || "?"}  |  UL: ${result?.upload?.provider || "?"}`;
   const time = `Duración: ${formatMs(totalTimeMs)}  |  Muestras ping: ${PING_SAMPLES}`;
 
-  const dlLine = `Descarga  ${padRight(result?.download?.speedLabel || "0.00 Mbps", 12)} ${buildBar(dlPct)} ${formatPercent(dlPct)}${dlOk ? "" : " (fallo)"}`;
-  const ulLine = `Subida    ${padRight(result?.upload?.speedLabel || "0.00 Mbps", 12)} ${buildBar(ulPct)} ${formatPercent(ulPct)}${ulOk ? "" : " (fallo)"}`;
-  const pingLine = `Ping      ${padRight(formatMs(ping), 12)} ${buildBar(pingPct)} ${formatPercent(pingPct)}`;
-  const jitLine = `Jitter    ${padRight(formatMs(jitter), 12)} ${buildBar(jitterPct)} ${formatPercent(jitterPct)}`;
+  const lines = [
+    "⚡ SPEEDTEST SIMPLE",
+    `Modo: ${modeLabel}`,
+    `Descarga: ${result?.download?.speedLabel || "0.00 Mbps"}${dlOk ? "" : " ⚠️"}`,
+    `Subida: ${result?.upload?.speedLabel || "0.00 Mbps"}${ulOk ? "" : " ⚠️"}`,
+    `Ping: ${formatMs(ping)} | Jitter: ${formatMs(jitter)}`,
+    `Fuentes: DL ${result?.download?.provider || "?"} | UL ${result?.upload?.provider || "?"}`,
+    `Duración: ${formatMs(totalTimeMs)} · ${PING_SAMPLES} muestras`,
+  ];
 
-  const bytesLine = `Datos     DL ${formatBytes(result?.download?.bytes)} | UL ${formatBytes(result?.upload?.bytes)}`;
+  if (contactText) {
+    lines.push(`Contacto: ${contactText}`);
+  }
 
-  return (
-    "```" +
-    "\n" +
-    box([header, " ", dlLine, ulLine, pingLine, jitLine, " ", sources, bytesLine, time], 72) +
-    "\n" +
-    "```"
-  );
+  return lines.join("\n");
 }
 
-function buildErrorMessage(error) {
+function buildErrorMessage(error, contactText = "") {
   const message = String(error?.message || error || "Error desconocido");
-
-  return (
-    `No pude completar el speedtest.\n` +
-    `Motivo: *${message}*\n\n` +
-    `Posibles causas:\n` +
-    `- el hosting bloquea pruebas de red\n` +
-    `- la salida HTTP esta limitada\n` +
-    `- la conexion del servidor esta inestable`
-  );
+  const lines = [
+    "Speedtest no se completó.",
+    `Motivo: ${message}`,
+  ];
+  if (contactText) lines.push(`Contacto: ${contactText}`);
+  return lines.join("\n");
 }
 
 export default {
@@ -416,7 +425,7 @@ export default {
   category: "sistema",
   description: "Mide ping, descarga y subida del internet del bot",
 
-  run: async ({ sock, msg, from, args = [] }) => {
+  run: async ({ sock, msg, from, args = [], settings = {} }) => {
     if (activeSpeedtest) {
       return sock.sendMessage(
         from,
@@ -435,13 +444,11 @@ export default {
     const downloadBytes = isFull ? 40_000_000 : isLite ? 8_000_000 : DEFAULT_DOWNLOAD_BYTES;
     const uploadBytes = isFull ? 12_000_000 : isLite ? 2_000_000 : DEFAULT_UPLOAD_BYTES;
 
+    const contactInfo = buildOwnerContact(settings);
     await sock.sendMessage(
       from,
       {
-        text:
-          "*Iniciando speedtest del bot...*\n\n" +
-          "Estoy midiendo ping, descarga y subida. Esto puede tardar unos segundos.\n" +
-          `Modo: *${modeLabel}*`,
+        text: `⚡ Speedtest ${modeLabel} · contacto: ${contactInfo}`,
         ...global.channelInfo,
       },
       { quoted: msg }
@@ -451,9 +458,10 @@ export default {
 
     try {
       const result = await activeSpeedtest;
+      const contactInfo = buildOwnerContact(settings);
       return sock.sendMessage(
         from,
-        { text: buildResultMessage(result, modeLabel), ...global.channelInfo },
+        { text: buildResultMessage(result, modeLabel, contactInfo), ...global.channelInfo },
         { quoted: msg }
       );
     } catch (error) {
@@ -462,7 +470,7 @@ export default {
       return sock.sendMessage(
         from,
         {
-          text: buildErrorMessage(error),
+          text: buildErrorMessage(error, buildOwnerContact(settings)),
           ...global.channelInfo,
         },
         { quoted: msg }
