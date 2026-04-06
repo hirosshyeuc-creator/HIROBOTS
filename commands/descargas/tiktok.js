@@ -11,7 +11,6 @@ const API_TIKTOK_URL = `${API_BASE}/ttdlmp4`;
 
 const COOLDOWN_TIME = 0;
 const DEFAULT_VIDEO_QUALITY = "2";
-const QUALITY_FALLBACK_ORDER = ["2", "1"];
 const API_LANG = "es";
 const REQUEST_TIMEOUT = 60000;
 const MAX_VIDEO_BYTES = 80 * 1024 * 1024;
@@ -22,18 +21,13 @@ const TMP_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 
 const cooldowns = new Map();
 
-ensureTmpDir();
+if (!fs.existsSync(TMP_DIR)) {
+  fs.mkdirSync(TMP_DIR, { recursive: true });
+}
 
 cleanupOldTempFiles();
 
-function ensureTmpDir() {
-  try {
-    fs.mkdirSync(TMP_DIR, { recursive: true });
-  } catch {}
-}
-
 function cleanupOldTempFiles() {
-  ensureTmpDir();
   try {
     const now = Date.now();
     const files = fs.readdirSync(TMP_DIR);
@@ -92,21 +86,6 @@ function extractApiError(data, status) {
   );
 }
 
-function toFriendlyTikTokError(error) {
-  const raw = String(error?.message || error || "").trim();
-  const lower = raw.toLowerCase();
-
-  if (
-    lower.includes("<!doctype html") ||
-    lower.includes("just a moment") ||
-    lower.includes("enable javascript and cookies")
-  ) {
-    return "El proveedor de TikTok activo esta protegido temporalmente. Reintenta en 20-40 segundos.";
-  }
-
-  return raw || "No se pudo procesar el video.";
-}
-
 function normalizeApiUrl(url) {
   const value = String(url || "").trim();
   if (!value) return "";
@@ -117,25 +96,18 @@ function normalizeApiUrl(url) {
 
 function pickApiDownloadUrl(data) {
   return (
-    data?.stream_url_full ||
     data?.download_url_full ||
-    data?.stream_url ||
+    data?.stream_url_full ||
     data?.download_url ||
+    data?.stream_url ||
     data?.url ||
-    data?.result?.stream_url_full ||
     data?.result?.download_url_full ||
-    data?.result?.stream_url ||
+    data?.result?.stream_url_full ||
     data?.result?.download_url ||
+    data?.result?.stream_url ||
     data?.result?.url ||
     ""
   );
-}
-
-function isTrustedInternalUrl(url) {
-  const value = String(url || "").trim();
-  if (!value) return false;
-  if (value.startsWith("/")) return true;
-  return value.startsWith(`${API_BASE}/`);
 }
 
 function extractTextFromMessage(message) {
@@ -186,7 +158,7 @@ function normalizeTikTokQuality(value = "") {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) return "";
 
-  if (["hd", "best", "alta", "high"].includes(normalized)) return "2";
+  if (["hd", "best", "alta", "high"].includes(normalized)) return "hd";
   if (["sd", "low", "baja", "lite"].includes(normalized)) return "2";
   if (["1", "2", "3", "4", "5"].includes(normalized)) return normalized;
 
@@ -205,14 +177,9 @@ function resolveTikTokQuality(ctx) {
   return DEFAULT_VIDEO_QUALITY;
 }
 
-function buildTikTokQualityCandidates(primary = "") {
-  const normalizedPrimary = normalizeTikTokQuality(primary) || DEFAULT_VIDEO_QUALITY;
-  return Array.from(new Set([normalizedPrimary, ...QUALITY_FALLBACK_ORDER].filter(Boolean)));
-}
-
 function formatTikTokQualityLabel(quality = "") {
   const q = String(quality || "").trim().toLowerCase();
-  if (q === "hd" || q === "best") return "Normal";
+  if (q === "hd" || q === "best") return "HD";
   if (/^\d+$/.test(q)) return `Slot ${q}`;
   return q || DEFAULT_VIDEO_QUALITY;
 }
@@ -270,34 +237,29 @@ async function apiGet(url, params, timeout = REQUEST_TIMEOUT) {
 
 async function requestTikTokMeta(videoUrl, qualityHint) {
   let lastError = "No se pudo obtener metadata del video de TikTok.";
-  const qualityCandidates = buildTikTokQualityCandidates(qualityHint);
 
-  for (const quality of qualityCandidates) {
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        const data = await apiGet(API_TIKTOK_URL, {
-          mode: "link",
-          fast: "true",
-          quality,
-          lang: API_LANG,
-          url: videoUrl,
-        });
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const data = await apiGet(API_TIKTOK_URL, {
+        mode: "link",
+        quality: qualityHint,
+        lang: API_LANG,
+        url: videoUrl,
+      });
 
-        const title = safeFileName(data?.title || data?.result?.title || "tiktok");
-        const fileName = normalizeMp4Name(
-          data?.filename || data?.file_name || title || "tiktok"
-        );
+      const title = safeFileName(data?.title || data?.result?.title || "tiktok");
+      const fileName = normalizeMp4Name(
+        data?.filename || data?.file_name || title || "tiktok"
+      );
 
-        return {
-          title,
-          fileName,
-          qualityUsed: quality,
-          downloadUrl: normalizeApiUrl(pickApiDownloadUrl(data)),
-        };
-      } catch (error) {
-        lastError = error?.message || "Error desconocido";
-        await sleep(900 * attempt);
-      }
+      return {
+        title,
+        fileName,
+        downloadUrl: normalizeApiUrl(pickApiDownloadUrl(data)),
+      };
+    } catch (error) {
+      lastError = error?.message || "Error desconocido";
+      await sleep(900 * attempt);
     }
   }
 
@@ -305,60 +267,37 @@ async function requestTikTokMeta(videoUrl, qualityHint) {
 }
 
 async function downloadTikTokViaApi(videoUrl, fileName, qualityHint, directUrl = "") {
-  ensureTmpDir();
   const finalName = normalizeMp4Name(fileName || "tiktok.mp4");
   const tempPath = path.join(
     TMP_DIR,
     `${TMP_FILE_PREFIX}${Date.now()}-${randomUUID()}-${finalName}`
   );
 
-  const buildRequestConfig = (useDirectLink = false) => {
-    const config = {
-      responseType: "stream",
-      timeout: REQUEST_TIMEOUT,
-      maxRedirects: 5,
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
-        Accept: "*/*",
-        Referer: `${API_BASE}/`,
-      },
-      validateStatus: () => true,
-    };
-
-    if (!useDirectLink) {
-      config.params = {
-        mode: "file",
-        fast: "true",
-        quality: qualityHint,
-        lang: API_LANG,
-        url: videoUrl,
-      };
-    }
-
-    return config;
+  const normalizedDirectUrl = normalizeApiUrl(directUrl);
+  const requestUrl = normalizedDirectUrl || API_TIKTOK_URL;
+  const requestConfig = {
+    responseType: "stream",
+    timeout: REQUEST_TIMEOUT,
+    maxRedirects: 5,
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
+      Accept: "*/*",
+      Referer: `${API_BASE}/`,
+    },
+    validateStatus: () => true,
   };
 
-  const normalizedDirectUrl = normalizeApiUrl(directUrl);
-  const canUseDirectUrl = isTrustedInternalUrl(normalizedDirectUrl);
-  let response;
-  try {
-    response = await axios.get(
-      canUseDirectUrl ? normalizedDirectUrl : API_TIKTOK_URL,
-      buildRequestConfig(canUseDirectUrl)
-    );
-  } catch (error) {
-    if (!canUseDirectUrl) {
-      throw error;
-    }
-    response = await axios.get(API_TIKTOK_URL, buildRequestConfig(false));
+  if (!normalizedDirectUrl) {
+    requestConfig.params = {
+      mode: "file",
+      quality: qualityHint,
+      lang: API_LANG,
+      url: videoUrl,
+    };
   }
 
-  if (response.status >= 400) {
-    if (canUseDirectUrl) {
-      response = await axios.get(API_TIKTOK_URL, buildRequestConfig(false));
-    }
-  }
+  const response = await axios.get(requestUrl, requestConfig);
 
   if (response.status >= 400) {
     const errorText = await readStreamToText(response.data).catch(() => "");
@@ -373,20 +312,6 @@ async function downloadTikTokViaApi(videoUrl, fileName, qualityHint, directUrl =
         parsed || { message: errorText || "Error al descargar el video." },
         response.status
       )
-    );
-  }
-
-  const contentType = String(response.headers?.["content-type"] || "").toLowerCase();
-  if (contentType.includes("text/html")) {
-    if (canUseDirectUrl) {
-      response = await axios.get(API_TIKTOK_URL, buildRequestConfig(false));
-    }
-  }
-
-  const fallbackContentType = String(response.headers?.["content-type"] || "").toLowerCase();
-  if (fallbackContentType.includes("text/html")) {
-    throw new Error(
-      "El proveedor de TikTok devolvio pagina de verificacion (Cloudflare). Reintenta en unos segundos."
     );
   }
 
@@ -551,7 +476,7 @@ export default {
       const downloaded = await downloadTikTokViaApi(
         videoUrl,
         meta.fileName,
-        meta.qualityUsed || qualityHint,
+        qualityHint,
         meta.downloadUrl
       );
       tempPath = downloaded.tempPath;
@@ -571,7 +496,7 @@ export default {
       cooldowns.delete(userId);
 
       await sock.sendMessage(from, {
-        text: `❌ ${toFriendlyTikTokError(err)}`,
+        text: `❌ ${String(err?.message || "No se pudo procesar el video.")}`,
         ...global.channelInfo,
       });
     } finally {
