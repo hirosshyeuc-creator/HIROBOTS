@@ -102,15 +102,15 @@ function normalizeApiUrl(url) {
 
 function pickApiDownloadUrl(data) {
   return (
-    data?.download_url_full ||
     data?.stream_url_full ||
-    data?.download_url ||
+    data?.download_url_full ||
     data?.stream_url ||
+    data?.download_url ||
     data?.url ||
-    data?.result?.download_url_full ||
     data?.result?.stream_url_full ||
-    data?.result?.download_url ||
+    data?.result?.download_url_full ||
     data?.result?.stream_url ||
+    data?.result?.download_url ||
     data?.result?.url ||
     ""
   );
