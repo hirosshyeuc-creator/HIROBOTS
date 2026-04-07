@@ -6,8 +6,8 @@ import { chargeDownloadRequest, refundDownloadCharge } from "../economia/downloa
 const API_BASE = getDvyerBaseUrl();
 const API_MP3_URL = buildDvyerUrl("/ytmp3");
 const API_SEARCH_URL = buildDvyerUrl("/ytsearch");
-const AUDIO_QUALITY = "64k";
-const REQUEST_TIMEOUT = 25000;
+const AUDIO_QUALITY = "128k";
+const REQUEST_TIMEOUT = 30000;
 const COOLDOWN_TIME = 0;
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const SPEED_MODE_LINK = true;
@@ -258,7 +258,7 @@ async function sendAudioFast(sock, from, quoted, { downloadUrl, fileName, title 
 }
 
 export default {
-  command: ["ytmp3"],
+  command: ["ytmp3", "ytmp3dv"],
   category: "descarga",
 
   run: async (ctx) => {
