@@ -38,6 +38,14 @@ function safeText(value, fallback = "") {
   return text || fallback;
 }
 
+function displayTitle(value, fallback = "video youtube") {
+  const text = String(value || fallback)
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  return text || fallback;
+}
+
 function safeFileName(value, fallback = "video") {
   const clean = String(value || fallback)
     .replace(/[\\/:*?"<>|]/g, "")
@@ -45,6 +53,57 @@ function safeFileName(value, fallback = "video") {
     .trim()
     .slice(0, 90);
   return clean || fallback;
+}
+
+function buildStatusText({ title, quality, state }) {
+  return [
+    "╭─〔 *𝑫𝑽𝒀𝑬𝑹 • 𝑴𝑷𝟒* 〕",
+    `┃ ▣ *Título:* ${displayTitle(title)}`,
+    `┃ ⌁ *Calidad:* ${quality}`,
+    `┃ ◈ *Estado:* ${state}`,
+    "╰─⟡ _Validando stream y metadata..._",
+  ].join("\n");
+}
+
+function buildReadyCaption({ title, quality }) {
+  return [
+    "╭─〔 *𝑫𝑽𝒀𝑬𝑹 • 𝑽𝑰𝑫𝑬𝑶* 〕",
+    `┃ ▣ *${displayTitle(title)}*`,
+    `┃ ⌁ *Calidad:* ${quality}`,
+    "╰─⟡ _Video listo_",
+  ].join("\n");
+}
+
+function buildMediaContext({ title, body, thumbnail, sourceUrl }) {
+  const channelContext = global.channelInfo?.contextInfo || {};
+  const externalAdReply = {
+    title: displayTitle(title),
+    body: body || "DVYER MP4 • descarga directa",
+    mediaType: 2,
+    sourceUrl: sourceUrl || "https://dv-yer-api.online",
+    renderLargerThumbnail: false,
+    showAdAttribution: false,
+  };
+  if (thumbnail) {
+    externalAdReply.thumbnailUrl = thumbnail;
+  }
+  return {
+    ...channelContext,
+    externalAdReply,
+  };
+}
+
+function withChannelInfo(content, contextInfo = null) {
+  const base = global.channelInfo || {};
+  const mergedContext = {
+    ...(base.contextInfo || {}),
+    ...(contextInfo || {}),
+  };
+  return {
+    ...content,
+    ...base,
+    ...(Object.keys(mergedContext).length ? { contextInfo: mergedContext } : {}),
+  };
 }
 
 function normalizeMp4Name(value) {
@@ -335,7 +394,7 @@ async function resolveVideoInput(rawInput, signal) {
   }
   return {
     videoUrl: safeText(first.url),
-    title: safeText(first.title, "video youtube"),
+    title: displayTitle(first.title, "video youtube"),
     thumbnail: first.thumbnail || null,
   };
 }
@@ -359,10 +418,16 @@ async function requestVideoLink(endpointUrl, videoUrl, quality, signal, { fastMo
       if (!streamUrl) {
         throw new Error("No se obtuvo enlace de stream.");
       }
-      const title = safeText(payload?.title, "video youtube");
-      const fileName = normalizeMp4Name(payload?.filename || payload?.fileName || title);
+      const title = displayTitle(payload?.title, "video youtube");
+      const fileName = normalizeMp4Name(title);
       const resolvedQuality = safeText(payload?.quality || payload?.provider_quality || quality, quality);
-      return { streamUrl, title, fileName, quality: resolvedQuality };
+      return {
+        streamUrl,
+        title,
+        fileName,
+        quality: resolvedQuality,
+        thumbnail: payload?.thumbnail || payload?.image || null,
+      };
     } catch (error) {
       lastError = error;
       if (isUnauthorizedLikeError(error)) {
@@ -415,18 +480,27 @@ async function resolveVideoLink(videoUrl, requestedQuality, signal) {
   throw lastError || new Error("No se pudo obtener un enlace de video.");
 }
 
-async function sendVideo(sock, from, quoted, { streamUrl, title, fileName, quality, signal }) {
+async function sendVideo(sock, from, quoted, { streamUrl, title, fileName, quality, thumbnail, videoUrl, signal }) {
   let lastError = null;
+  const cleanTitle = displayTitle(title);
+  const cleanQuality = safeText(quality, DEFAULT_VIDEO_QUALITY);
+  const caption = buildReadyCaption({ title: cleanTitle, quality: cleanQuality });
+  const metadata = buildMediaContext({
+    title: cleanTitle,
+    body: `MP4 • ${cleanQuality} • DVYER`,
+    thumbnail,
+    sourceUrl: videoUrl,
+  });
   try {
     await sock.sendMessage(
       from,
-      {
+      withChannelInfo({
         video: { url: streamUrl },
         mimetype: "video/mp4",
         fileName,
-        caption: `🎬 ${title}\n🎚️ ${quality}`,
-        ...global.channelInfo,
-      },
+        title: cleanTitle,
+        caption,
+      }, metadata),
       quoted
     );
     return;
@@ -437,13 +511,13 @@ async function sendVideo(sock, from, quoted, { streamUrl, title, fileName, quali
   try {
     await sock.sendMessage(
       from,
-      {
+      withChannelInfo({
         document: { url: streamUrl },
         mimetype: "video/mp4",
         fileName,
-        caption: `🎬 ${title}\n🎚️ ${quality}`,
-        ...global.channelInfo,
-      },
+        title: cleanTitle,
+        caption,
+      }, metadata),
       quoted
     );
     return;
@@ -455,13 +529,13 @@ async function sendVideo(sock, from, quoted, { streamUrl, title, fileName, quali
   try {
     await sock.sendMessage(
       from,
-      {
+      withChannelInfo({
         video: buffer,
         mimetype: "video/mp4",
         fileName,
-        caption: `🎬 ${title}\n🎚️ ${quality}`,
-        ...global.channelInfo,
-      },
+        title: cleanTitle,
+        caption,
+      }, metadata),
       quoted
     );
     return;
@@ -471,20 +545,20 @@ async function sendVideo(sock, from, quoted, { streamUrl, title, fileName, quali
 
   await sock.sendMessage(
     from,
-    {
+    withChannelInfo({
       document: buffer,
       mimetype: "video/mp4",
       fileName,
-      caption: `🎬 ${title}\n🎚️ ${quality}`,
-      ...global.channelInfo,
-    },
+      title: cleanTitle,
+      caption,
+    }, metadata),
     quoted
   ).catch(() => {
     throw lastError || new Error("No se pudo enviar el video.");
   });
 }
 
-async function sendVideoWithFreshLink(sock, from, quoted, { videoUrl, requestedQuality, initialResolved, fallbackTitle, signal }) {
+async function sendVideoWithFreshLink(sock, from, quoted, { videoUrl, requestedQuality, initialResolved, fallbackTitle, thumbnail, signal }) {
   let resolved = initialResolved;
   let lastError = null;
 
@@ -492,9 +566,11 @@ async function sendVideoWithFreshLink(sock, from, quoted, { videoUrl, requestedQ
     try {
       await sendVideo(sock, from, quoted, {
         streamUrl: resolved.streamUrl,
-        title: safeText(resolved.title || fallbackTitle, "video youtube"),
-        fileName: normalizeMp4Name(resolved.fileName || fallbackTitle),
+        title: displayTitle(resolved.title || fallbackTitle, "video youtube"),
+        fileName: normalizeMp4Name(resolved.title || fallbackTitle),
         quality: resolved.quality || requestedQuality || DEFAULT_VIDEO_QUALITY,
+        thumbnail: resolved.thumbnail || thumbnail,
+        videoUrl,
         signal,
       });
       return;
@@ -568,10 +644,18 @@ export default {
 
       await sock.sendMessage(
         from,
-        {
-          text: `🎬 DVYER MP4\n📼 ${video.title}\n🎚️ Pedido: ${parsed.quality}\n⏳ Preparando descarga...`,
-          ...global.channelInfo,
-        },
+        withChannelInfo({
+          text: buildStatusText({
+            title: video.title,
+            quality: parsed.quality,
+            state: "buscando mejor motor",
+          }),
+        }, buildMediaContext({
+          title: video.title,
+          body: `MP4 • ${parsed.quality}`,
+          thumbnail: video.thumbnail,
+          sourceUrl: video.videoUrl,
+        })),
         quoted
       );
 
@@ -584,6 +668,7 @@ export default {
         requestedQuality: parsed.quality,
         initialResolved: resolved,
         fallbackTitle: video.title,
+        thumbnail: video.thumbnail,
         signal: abortSignal,
       });
     } catch (error) {

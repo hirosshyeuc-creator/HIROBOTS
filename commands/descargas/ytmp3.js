@@ -44,6 +44,65 @@ function safeName(value, fallback = "audio") {
   return clean || fallback;
 }
 
+function displayTitle(value, fallback = "audio") {
+  const clean = String(value || fallback)
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  return clean || fallback;
+}
+
+function buildStatusText({ title, quality, state }) {
+  return [
+    "╭─〔 *𝑫𝑽𝒀𝑬𝑹 • 𝑴𝑷𝟑* 〕",
+    `┃ ♬ *Título:* ${displayTitle(title, "audio")}`,
+    `┃ ⌁ *Calidad:* ${quality}`,
+    `┃ ◈ *Estado:* ${state}`,
+    "╰─⟡ _Preparando metadata original..._",
+  ].join("\n");
+}
+
+function buildReadyCaption({ title, quality }) {
+  return [
+    "╭─〔 *𝑫𝑽𝒀𝑬𝑹 • 𝑨𝑼𝑫𝑰𝑶* 〕",
+    `┃ ♬ *${displayTitle(title, "audio")}*`,
+    `┃ ⌁ *Calidad:* ${quality}`,
+    "╰─⟡ _Archivo listo_",
+  ].join("\n");
+}
+
+function buildMediaContext({ title, body, thumbnail, sourceUrl }) {
+  const channelContext = global.channelInfo?.contextInfo || {};
+  const externalAdReply = {
+    title: displayTitle(title, "audio"),
+    body: body || "DVYER MP3 • descarga directa",
+    mediaType: 2,
+    sourceUrl: sourceUrl || "https://dv-yer-api.online",
+    renderLargerThumbnail: false,
+    showAdAttribution: false,
+  };
+  if (thumbnail) {
+    externalAdReply.thumbnailUrl = thumbnail;
+  }
+  return {
+    ...channelContext,
+    externalAdReply,
+  };
+}
+
+function withChannelInfo(content, contextInfo = null) {
+  const base = global.channelInfo || {};
+  const mergedContext = {
+    ...(base.contextInfo || {}),
+    ...(contextInfo || {}),
+  };
+  return {
+    ...content,
+    ...base,
+    ...(Object.keys(mergedContext).length ? { contextInfo: mergedContext } : {}),
+  };
+}
+
 function isHttpUrl(value) {
   return /^https?:\/\//i.test(String(value || ""));
 }
@@ -241,7 +300,7 @@ async function resolveVideo(rawInput, signal) {
 
   const result = {
     videoUrl: String(first.url).trim(),
-    title: safeName(first.title || "audio"),
+    title: displayTitle(first.title || "audio"),
     thumbnail: first.thumbnail || null,
   };
   writeCache(cacheKey, result);
@@ -287,8 +346,9 @@ async function resolveMp3Link(videoUrl, signal, preferredTitle = "") {
   );
   const result = {
     downloadUrl,
-    title: cleanedTitle,
+    title: displayTitle(payload?.title || preferredTitle || cleanedTitle, cleanedTitle),
     fileName: `${fileBase}.mp3`,
+    thumbnail: payload?.thumbnail || payload?.image || null,
   };
   return result;
 }
@@ -321,18 +381,25 @@ function getCooldownRemaining(untilMs) {
   return Math.max(0, Math.ceil((untilMs - now()) / 1000));
 }
 
-async function sendAudioFast(sock, from, quoted, { downloadUrl, fileName, title, signal }) {
+async function sendAudioFast(sock, from, quoted, { downloadUrl, fileName, title, thumbnail, videoUrl, signal }) {
   let lastError = null;
+  const cleanTitle = displayTitle(title, "audio");
+  const metadata = buildMediaContext({
+    title: cleanTitle,
+    body: `MP3 • ${AUDIO_QUALITY} • DVYER`,
+    thumbnail,
+    sourceUrl: videoUrl,
+  });
   try {
     await sock.sendMessage(
       from,
-      {
+      withChannelInfo({
         audio: { url: downloadUrl },
         mimetype: "audio/mpeg",
         ptt: false,
         fileName,
-        ...global.channelInfo,
-      },
+        title: cleanTitle,
+      }, metadata),
       quoted
     );
     return;
@@ -343,13 +410,13 @@ async function sendAudioFast(sock, from, quoted, { downloadUrl, fileName, title,
   try {
     await sock.sendMessage(
       from,
-      {
+      withChannelInfo({
         document: { url: downloadUrl },
         mimetype: "audio/mpeg",
         fileName,
-        caption: `🎵 ${title}`,
-        ...global.channelInfo,
-      },
+        title: cleanTitle,
+        caption: buildReadyCaption({ title: cleanTitle, quality: AUDIO_QUALITY }),
+      }, metadata),
       quoted
     );
     return;
@@ -361,13 +428,13 @@ async function sendAudioFast(sock, from, quoted, { downloadUrl, fileName, title,
   try {
     await sock.sendMessage(
       from,
-      {
+      withChannelInfo({
         audio: buffer,
         mimetype: "audio/mpeg",
         ptt: false,
         fileName,
-        ...global.channelInfo,
-      },
+        title: cleanTitle,
+      }, metadata),
       quoted
     );
     return;
@@ -377,20 +444,20 @@ async function sendAudioFast(sock, from, quoted, { downloadUrl, fileName, title,
 
   await sock.sendMessage(
     from,
-    {
+    withChannelInfo({
       document: buffer,
       mimetype: "audio/mpeg",
       fileName,
-      caption: `🎵 ${title}`,
-      ...global.channelInfo,
-    },
+      title: cleanTitle,
+      caption: buildReadyCaption({ title: cleanTitle, quality: AUDIO_QUALITY }),
+    }, metadata),
     quoted
   ).catch(() => {
     throw lastError || new Error("No se pudo enviar el audio.");
   });
 }
 
-async function sendAudioWithFreshLink(sock, from, quoted, { videoUrl, initialMp3, fallbackTitle, signal }) {
+async function sendAudioWithFreshLink(sock, from, quoted, { videoUrl, initialMp3, fallbackTitle, thumbnail, signal }) {
   let mp3 = initialMp3;
   let lastError = null;
 
@@ -400,6 +467,8 @@ async function sendAudioWithFreshLink(sock, from, quoted, { videoUrl, initialMp3
         downloadUrl: mp3.downloadUrl,
         fileName: mp3.fileName,
         title: mp3.title || fallbackTitle,
+        thumbnail: mp3.thumbnail || thumbnail,
+        videoUrl,
         signal,
       });
       return;
@@ -464,10 +533,18 @@ export default {
 
       await sock.sendMessage(
         from,
-        {
-          text: `🎵 DVYER MP3\n🎧 ${video.title}\n🎚️ ${AUDIO_QUALITY}\n⏳ Preparando descarga...`,
-          ...global.channelInfo,
-        },
+        withChannelInfo({
+          text: buildStatusText({
+            title: video.title,
+            quality: AUDIO_QUALITY,
+            state: "buscando enlace seguro",
+          }),
+        }, buildMediaContext({
+          title: video.title,
+          body: `MP3 • ${AUDIO_QUALITY}`,
+          thumbnail: video.thumbnail,
+          sourceUrl: video.videoUrl,
+        })),
         quoted
       );
 
@@ -479,6 +556,7 @@ export default {
         videoUrl: video.videoUrl,
         initialMp3: mp3,
         fallbackTitle: video.title,
+        thumbnail: video.thumbnail,
         signal: abortSignal,
       });
     } catch (error) {
