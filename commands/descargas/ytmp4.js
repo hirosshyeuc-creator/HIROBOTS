@@ -24,6 +24,7 @@ const HTTPS_AGENT = new https.Agent({ keepAlive: true, maxSockets: 20, maxFreeSo
 const QUALITY_PATTERN = /^(1080p|720p|480p|360p|240p|144p|best|hd|sd|\d{3,4}p?)$/i;
 const FFMPEG_FULL_MAX_BYTES = 700 * 1024 * 1024;
 const FFMPEG_REMUX_MAX_BYTES = 300 * 1024 * 1024;
+const FAST_COMPAT_TRANSCODE_MAX_BYTES = 220 * 1024 * 1024;
 const FFMPEG_MIN_TIMEOUT = 40_000;
 const FFMPEG_MAX_TIMEOUT = 420_000;
 
@@ -277,6 +278,19 @@ async function remuxMp4Fast(data) {
     await deleteFileSafe(outputPath);
     return data;
   }
+}
+
+async function prepareMp4Fast(data) {
+  const remuxed = await remuxMp4Fast(data);
+  if (remuxed?.tempPath && remuxed.tempPath !== data?.tempPath) return remuxed;
+
+  const size = Number(remuxed?.size || 0);
+  if (!Number.isFinite(size) || size <= 0 || size > FAST_COMPAT_TRANSCODE_MAX_BYTES) {
+    return remuxed;
+  }
+
+  const transcoded = await transcodeMp4Full(remuxed);
+  return transcoded || remuxed;
 }
 
 async function findLatestTmpMp4(maxAgeMs = 30 * 60 * 1000) {
@@ -775,10 +789,10 @@ export default {
       const downloaded = await downloadYtmp4Fallback(resolved.url, resolved.title, quality, fast);
       tempPath = downloaded.tempPath;
 
-      // En fast evitamos ffmpeg pesado para enviar mas rapido.
-      // En nofast mantenemos normalizacion para maxima compatibilidad.
+      // En fast priorizamos velocidad, pero con compatibilidad WhatsApp.
+      // En nofast mantenemos normalizacion completa.
       const prepared = fast
-        ? downloaded
+        ? await prepareMp4Fast(downloaded)
         : await remuxMp4Fast(await transcodeMp4Full(downloaded));
       tempPath = prepared.tempPath;
       const officialFileName = normalizeMp4Name(resolved.title || prepared.fileName || "youtube-video.mp4");
@@ -788,7 +802,7 @@ export default {
         fileName: officialFileName,
         title: resolved.title || path.parse(officialFileName).name,
         quality,
-      }, { preferDocument: fast });
+      });
       sentSuccessfully = true;
     } catch (error) {
       console.error("YTMP4 ERROR:", error?.message || error);
