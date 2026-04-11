@@ -87,10 +87,12 @@ function parseContentDispositionFileName(headerValue) {
 }
 
 async function readStreamToText(stream) {
+  if (!stream || typeof stream.on !== "function") return "";
   return await new Promise((resolve, reject) => {
     let data = "";
     stream.on("data", (chunk) => {
-      data += chunk.toString();
+      if (chunk == null) return;
+      data += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
       if (data.length > 20000) data = data.slice(-20000);
     });
     stream.on("end", () => resolve(data));
@@ -138,7 +140,8 @@ function runFfmpegRemux(inputPath, outputPath, timeoutMs) {
     }, timeoutMs);
 
     child.stderr?.on("data", (chunk) => {
-      stderr += chunk.toString();
+      if (chunk == null) return;
+      stderr += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
       if (stderr.length > 4000) stderr = stderr.slice(-4000);
     });
 
