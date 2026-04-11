@@ -49,6 +49,11 @@ function cleanText(value = "") {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function cleanMetadataText(value = "", fallback = "YouTube MP3") {
+  const text = cleanText(value).replace(/[\u0000-\u001f\u007f]/g, "").trim();
+  return text.slice(0, 180) || fallback;
+}
+
 function clipText(value = "", max = 90) {
   const text = cleanText(value);
   if (text.length <= max) return text;
@@ -356,12 +361,20 @@ function runFfmpeg(args, timeoutMs = METADATA_TIMEOUT) {
 }
 
 async function writeMp3Metadata(downloaded, resolved) {
-  const title = getMp3Title(resolved, downloaded);
+  const title = cleanMetadataText(getMp3Title(resolved, downloaded));
   const coverUrl = buildYoutubeCoverUrl(resolved?.url, resolved?.thumbnail || "");
   const outputPath = path.join(TMP_DIR, `${Date.now()}-${randomUUID()}-ytmp3-meta.mp3`);
   let coverPath = null;
 
   try {
+    if (downloaded.size > AUDIO_AS_DOCUMENT_THRESHOLD) {
+      return {
+        ...downloaded,
+        fileName: normalizeMp3Name(title || downloaded.fileName),
+        title,
+      };
+    }
+
     try {
       coverPath = await downloadCoverImage(coverUrl);
     } catch (error) {
