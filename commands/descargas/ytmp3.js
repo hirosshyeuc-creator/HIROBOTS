@@ -19,6 +19,9 @@ const AUDIO_AS_DOCUMENT_THRESHOLD = 80 * 1024 * 1024;
 const MIN_AUDIO_BYTES = 20 * 1024;
 const COVER_MAX_BYTES = 8 * 1024 * 1024;
 const METADATA_TIMEOUT = 4 * 60 * 1000;
+const MP3_COMPAT_TRANSCODE_MAX_BYTES = 260 * 1024 * 1024;
+const FFMPEG_MIN_TIMEOUT = 35_000;
+const FFMPEG_MAX_TIMEOUT = 480_000;
 const HTTP_AGENT = new http.Agent({ keepAlive: true });
 const HTTPS_AGENT = new https.Agent({ keepAlive: true });
 
@@ -159,14 +162,116 @@ function parseContentDispositionFileName(headerValue) {
 }
 
 async function readStreamToText(stream) {
+  if (!stream) return "";
+  if (typeof stream[Symbol.asyncIterator] === "function") {
+    let data = "";
+    for await (const chunk of stream) {
+      data += chunkToText(chunk);
+      if (data.length > 20000) data = data.slice(-20000);
+    }
+    return data;
+  }
+  if (typeof stream.on !== "function") return "";
   return await new Promise((resolve, reject) => {
     let data = "";
     stream.on("data", (chunk) => {
-      data += chunk.toString();
+      data += chunkToText(chunk);
+      if (data.length > 20000) data = data.slice(-20000);
     });
     stream.on("end", () => resolve(data));
     stream.on("error", reject);
   });
+}
+
+function chunkToText(chunk) {
+  if (chunk == null) return "";
+  if (Buffer.isBuffer(chunk)) return chunk.toString("utf8");
+  return String(chunk);
+}
+
+function ffmpegTimeoutForBytes(bytes) {
+  const mb = Math.max(1, Math.round(Number(bytes || 0) / (1024 * 1024)));
+  return Math.max(FFMPEG_MIN_TIMEOUT, Math.min(FFMPEG_MAX_TIMEOUT, mb * 1400));
+}
+
+function isLikelyMp3Source(data) {
+  const contentType = String(data?.contentType || "").toLowerCase();
+  const fileName = String(data?.fileName || "").toLowerCase();
+  const sourcePath = String(data?.tempPath || "");
+  if (contentType.includes("audio/mpeg") || contentType.includes("audio/mp3")) return true;
+  if (fileName.endsWith(".mp3")) return true;
+  try {
+    if (!sourcePath || !fs.existsSync(sourcePath)) return false;
+    const fd = fs.openSync(sourcePath, "r");
+    try {
+      const header = Buffer.alloc(10);
+      const read = fs.readSync(fd, header, 0, header.length, 0);
+      if (read >= 3 && header.slice(0, 3).toString("ascii") === "ID3") return true;
+      if (read >= 2) {
+        const b0 = header[0];
+        const b1 = header[1];
+        if (b0 === 0xff && (b1 & 0xe0) === 0xe0) return true;
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {}
+  return false;
+}
+
+async function ensureMp3Compatible(downloaded) {
+  if (isLikelyMp3Source(downloaded)) return downloaded;
+  const size = Number(downloaded?.size || 0);
+  if (!Number.isFinite(size) || size <= 0 || size > MP3_COMPAT_TRANSCODE_MAX_BYTES) return downloaded;
+
+  const sourcePath = String(downloaded?.tempPath || "");
+  if (!sourcePath || !fs.existsSync(sourcePath)) return downloaded;
+
+  const outputPath = path.join(TMP_DIR, `${Date.now()}-${randomUUID()}-ytmp3-fixed.mp3`);
+  const timeoutMs = ffmpegTimeoutForBytes(size);
+  try {
+    await runFfmpeg(
+      [
+        "-y",
+        "-i",
+        sourcePath,
+        "-vn",
+        "-c:a",
+        "libmp3lame",
+        "-b:a",
+        "192k",
+        "-ar",
+        "44100",
+        "-ac",
+        "2",
+        "-id3v2_version",
+        "3",
+        "-map_metadata",
+        "-1",
+        "-loglevel",
+        "error",
+        outputPath,
+      ],
+      timeoutMs
+    );
+    const stat = fs.existsSync(outputPath) ? fs.statSync(outputPath) : null;
+    if (!stat?.size || stat.size < MIN_AUDIO_BYTES) {
+      deleteFileSafe(outputPath);
+      return downloaded;
+    }
+    deleteFileSafe(sourcePath);
+    return {
+      ...downloaded,
+      tempPath: outputPath,
+      fileName: normalizeMp3Name(downloaded?.fileName || "youtube-audio.mp3"),
+      size: stat.size,
+      contentType: "audio/mpeg",
+    };
+  } catch (error) {
+    deleteFileSafe(outputPath);
+    console.warn("YTMP3 compat transcode skipped:", error?.message || error);
+    return downloaded;
+  }
 }
 
 function extractApiError(data, status) {
@@ -339,7 +444,7 @@ function runFfmpeg(args, timeoutMs = METADATA_TIMEOUT) {
     }, timeoutMs);
 
     child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
+      stderr += chunkToText(chunk);
       if (stderr.length > 4000) stderr = stderr.slice(-4000);
     });
 
@@ -531,7 +636,9 @@ export default {
 
       const downloaded = await downloadYtmp3(resolved.url, resolved.title);
       tempPath = downloaded.tempPath;
-      const tagged = await writeMp3Metadata(downloaded, resolved);
+      const compatible = await ensureMp3Compatible(downloaded);
+      tempPath = compatible.tempPath;
+      const tagged = await writeMp3Metadata(compatible, resolved);
       tempPath = tagged.tempPath;
 
       await sendMp3(sock, from, quoted, tagged);
