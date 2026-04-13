@@ -653,9 +653,6 @@ function buildBotIdentitySet(summary = {}) {
   const values = [
     summary?.waNumber,
     summary?.configuredNumber,
-    summary?.requesterNumber,
-    summary?.requesterJid,
-    summary?.id,
   ];
 
   for (const value of values) {
@@ -674,6 +671,82 @@ function isSummaryRuntimeReady(summary = {}) {
       summary?.connectionState === "open" ||
       summary?.connecting
   );
+}
+
+function setsIntersect(left = new Set(), right = new Set()) {
+  if (!(left instanceof Set) || !(right instanceof Set) || !left.size || !right.size) {
+    return false;
+  }
+
+  const [small, large] = left.size <= right.size ? [left, right] : [right, left];
+  for (const value of small) {
+    if (large.has(value)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function resolveLinkedIdentityLeaderBotId(targetBotId = "") {
+  const normalizedTargetId = String(targetBotId || "")
+    .trim()
+    .toLowerCase();
+  if (!normalizedTargetId) return "";
+
+  const targetConfig = getBotConfigById(normalizedTargetId);
+  if (!targetConfig) return normalizedTargetId;
+  const targetSummary = summarizeBotConfig(targetConfig);
+  const targetIdentities = buildBotIdentitySet(targetSummary);
+  if (!targetIdentities.size) return normalizedTargetId;
+
+  const candidates = [];
+  const allConfigs = [buildMainBotConfig(settings), ...(SUBBOT_SLOT_CONFIGS || [])];
+  for (const config of allConfigs) {
+    if (!config?.id) continue;
+    const summary = summarizeBotConfig(config);
+    if (!summary?.id) continue;
+    if (summary?.enabled === false) continue;
+    if (!(isSummaryRuntimeReady(summary) || summary?.registered)) continue;
+
+    const candidateIdentities = buildBotIdentitySet(summary);
+    if (!setsIntersect(targetIdentities, candidateIdentities)) continue;
+
+    const normalizedCandidateId = String(summary.id || "")
+      .trim()
+      .toLowerCase();
+    candidates.push({
+      botId: normalizedCandidateId,
+      priority: getBotGroupCommandPriority(normalizedCandidateId),
+      slot: Number(summary?.slot || getBotSlot(normalizedCandidateId) || 0),
+    });
+  }
+
+  if (!candidates.length) return normalizedTargetId;
+
+  candidates.sort((a, b) => {
+    if (a.priority !== b.priority) return a.priority - b.priority;
+    if (a.slot !== b.slot) return a.slot - b.slot;
+    return String(a.botId).localeCompare(String(b.botId));
+  });
+
+  return String(candidates[0]?.botId || normalizedTargetId).trim().toLowerCase();
+}
+
+function shouldCurrentBotHandleLinkedIdentity(botState) {
+  const botId = String(botState?.config?.id || "main")
+    .trim()
+    .toLowerCase();
+  const leaderBotId = resolveLinkedIdentityLeaderBotId(botId);
+  if (!leaderBotId) {
+    return { allowed: true, reason: "leader_unknown" };
+  }
+
+  return {
+    allowed: leaderBotId === botId,
+    reason: leaderBotId === botId ? "linked_identity_leader" : "linked_identity_shadow",
+    leaderBotId,
+  };
 }
 
 function isBotPresentInGroup(metadata = {}, summary = {}) {
@@ -2942,6 +3015,10 @@ const COMMAND_REPLAY_CACHE_TTL_MS = Math.max(
   30_000,
   parseNumberEnv("COMMAND_REPLAY_CACHE_TTL_MS", 2 * 60 * 1000) || 2 * 60 * 1000
 );
+const LINKED_IDENTITY_LOG_THROTTLE_MS = Math.max(
+  30_000,
+  parseNumberEnv("LINKED_IDENTITY_LOG_THROTTLE_MS", 120_000) || 120_000
+);
 const GROUP_UPDATE_CLAIM_ENABLED = parseBooleanEnv("GROUP_UPDATE_CLAIM_ENABLED", true);
 const GROUP_UPDATE_CLAIM_TTL_MS = Math.max(
   15_000,
@@ -3879,6 +3956,7 @@ function ensureBotState(config) {
     groupJoinNoticeCache: new Map(),
     groupUpdateClaimCache: new Map(),
     commandReplayCache: new Map(),
+    linkedIdentityLeaderLogAt: 0,
     persistedStateWriteTimer: null,
     persistedStateWritePending: false,
     socketRecoveryTimer: null,
@@ -8621,6 +8699,24 @@ async function handleIncomingMessages(botState, sock, messages) {
       if (!commandData) continue;
       const cmd = comandos.get(commandData.commandName);
       if (!cmd) continue;
+      const linkedIdentityDecision = shouldCurrentBotHandleLinkedIdentity(botState);
+      if (!linkedIdentityDecision.allowed) {
+        const now = Date.now();
+        if (
+          now - Number(botState?.linkedIdentityLeaderLogAt || 0) >=
+          LINKED_IDENTITY_LOG_THROTTLE_MS
+        ) {
+          botState.linkedIdentityLeaderLogAt = now;
+          logBotEvent(
+            botState,
+            "warn",
+            `Ignorado comando duplicado por identidad vinculada. Lider: ${
+              linkedIdentityDecision.leaderBotId || "desconocido"
+            }`
+          );
+        }
+        continue;
+      }
       const leaderDecision = shouldCurrentBotHandleGroupCommand(
         botState,
         executionInfo?.groupMetadata || null
