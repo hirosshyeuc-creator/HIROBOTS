@@ -664,6 +664,14 @@ function buildBotIdentitySet(summary = {}) {
   return identities;
 }
 
+function buildBotLiveIdentitySet(summary = {}) {
+  const identities = new Set();
+  for (const key of normalizeIdentityKeys(summary?.waNumber)) {
+    identities.add(key);
+  }
+  return identities;
+}
+
 function isSummaryRuntimeReady(summary = {}) {
   return Boolean(
     summary?.connected ||
@@ -697,7 +705,7 @@ function resolveLinkedIdentityLeaderBotId(targetBotId = "") {
   const targetConfig = getBotConfigById(normalizedTargetId);
   if (!targetConfig) return normalizedTargetId;
   const targetSummary = summarizeBotConfig(targetConfig);
-  const targetIdentities = buildBotIdentitySet(targetSummary);
+  const targetIdentities = buildBotLiveIdentitySet(targetSummary);
   if (!targetIdentities.size) return normalizedTargetId;
 
   const candidates = [];
@@ -707,9 +715,9 @@ function resolveLinkedIdentityLeaderBotId(targetBotId = "") {
     const summary = summarizeBotConfig(config);
     if (!summary?.id) continue;
     if (summary?.enabled === false) continue;
-    if (!(isSummaryRuntimeReady(summary) || summary?.registered)) continue;
+    if (!isSummaryRuntimeReady(summary)) continue;
 
-    const candidateIdentities = buildBotIdentitySet(summary);
+    const candidateIdentities = buildBotLiveIdentitySet(summary);
     if (!setsIntersect(targetIdentities, candidateIdentities)) continue;
 
     const normalizedCandidateId = String(summary.id || "")
