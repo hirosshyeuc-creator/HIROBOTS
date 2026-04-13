@@ -37,6 +37,7 @@ import {
 import {
   findGroupParticipant as findCompatGroupParticipant,
   isGroupMetadataOwner as isCompatGroupMetadataOwner,
+  normalizeJidDigits as normalizeCompatJidDigits,
   normalizeJidUser as normalizeCompatJidUser,
 } from "./lib/group-compat.js";
 import { applyStoredRuntimeVars } from "./lib/runtime-vars.js";
@@ -596,6 +597,147 @@ function getBotSlot(botId = "") {
 
 function sanitizePhoneNumber(value) {
   return String(value || "").replace(/\D/g, "");
+}
+
+function normalizeIdentityKeys(value = "") {
+  const output = new Set();
+  const raw = String(value || "").trim();
+  if (!raw) return output;
+
+  const normalizedUser = String(normalizeJidUser(raw) || "")
+    .trim()
+    .toLowerCase();
+  if (normalizedUser) {
+    output.add(normalizedUser);
+  }
+
+  const normalizedDigits =
+    String(normalizeCompatJidDigits(raw) || "").trim() || sanitizePhoneNumber(raw);
+  if (normalizedDigits) {
+    output.add(normalizedDigits);
+  }
+
+  return output;
+}
+
+function buildGroupParticipantIdentitySet(metadata = {}) {
+  const identities = new Set();
+  const participants = Array.isArray(metadata?.participants) ? metadata.participants : [];
+
+  for (const participant of participants) {
+    const values = [
+      participant,
+      participant?.id,
+      participant?.lid,
+      participant?.jid,
+      participant?.participant,
+      participant?.participantAlt,
+      participant?.participantPn,
+      participant?.participantLid,
+      participant?.phoneNumber,
+      participant?.phone_number,
+    ];
+
+    for (const value of values) {
+      for (const key of normalizeIdentityKeys(value)) {
+        identities.add(key);
+      }
+    }
+  }
+
+  return identities;
+}
+
+function buildBotIdentitySet(summary = {}) {
+  const identities = new Set();
+  const values = [
+    summary?.waNumber,
+    summary?.configuredNumber,
+    summary?.requesterNumber,
+    summary?.requesterJid,
+    summary?.id,
+  ];
+
+  for (const value of values) {
+    for (const key of normalizeIdentityKeys(value)) {
+      identities.add(key);
+    }
+  }
+
+  return identities;
+}
+
+function isSummaryRuntimeReady(summary = {}) {
+  return Boolean(
+    summary?.connected ||
+      summary?.hasSocket ||
+      summary?.connectionState === "open" ||
+      summary?.connecting
+  );
+}
+
+function isBotPresentInGroup(metadata = {}, summary = {}) {
+  const participantIdentitySet = buildGroupParticipantIdentitySet(metadata);
+  if (!participantIdentitySet.size) return false;
+
+  const botIdentitySet = buildBotIdentitySet(summary);
+  if (!botIdentitySet.size) return false;
+
+  for (const identity of botIdentitySet) {
+    if (participantIdentitySet.has(identity)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function resolveGroupCommandLeaderBotId(metadata = {}) {
+  const participants = Array.isArray(metadata?.participants) ? metadata.participants : [];
+  if (!participants.length) return "";
+
+  const mainSummary = summarizeBotConfig(buildMainBotConfig(settings));
+  if (isSummaryRuntimeReady(mainSummary) && isBotPresentInGroup(metadata, mainSummary)) {
+    return "main";
+  }
+
+  const candidates = [];
+  for (const config of SUBBOT_SLOT_CONFIGS || []) {
+    if (config?.enabled === false) continue;
+    const summary = summarizeBotConfig(config);
+    const slot = Number(summary?.slot || config?.slot || 0);
+    if (!summary?.id || slot < 1) continue;
+    if (!isSummaryRuntimeReady(summary)) continue;
+    if (!isBotPresentInGroup(metadata, summary)) continue;
+    candidates.push({
+      botId: String(summary.id || "").trim().toLowerCase(),
+      slot,
+    });
+  }
+
+  candidates.sort((a, b) => a.slot - b.slot);
+  return String(candidates?.[0]?.botId || "").trim().toLowerCase();
+}
+
+function shouldCurrentBotHandleGroupCommand(botState, metadata = null) {
+  const botId = String(botState?.config?.id || "main")
+    .trim()
+    .toLowerCase();
+  const participants = Array.isArray(metadata?.participants) ? metadata.participants : [];
+  if (!participants.length) {
+    return { allowed: true, reason: "missing_metadata" };
+  }
+
+  const leaderBotId = resolveGroupCommandLeaderBotId(metadata);
+  if (!leaderBotId) {
+    return { allowed: true, reason: "leader_unknown" };
+  }
+
+  return {
+    allowed: leaderBotId === botId,
+    reason: leaderBotId === botId ? "leader" : "not_leader",
+    leaderBotId,
+  };
 }
 
 function normalizePairingPhoneNumber(value) {
@@ -1246,10 +1388,7 @@ function buildGroupCommandSemanticKey(raw = {}, commandData = {}) {
       ""
   );
   const commandBodyHash = crypto.createHash("sha1").update(commandBody).digest("hex").slice(0, 16);
-  const timestampMs = parseMessageTimestampToMs(raw?.messageTimestamp);
-  const timestampSeconds = timestampMs ? Math.floor(timestampMs / 1000) : 0;
-
-  return `semantic|${chatId}|${sender}|${commandName}|${commandBodyHash}|${timestampSeconds}`;
+  return `semantic|${chatId}|${sender}|${commandName}|${commandBodyHash}`;
 }
 
 function buildCommandReplayKey(raw = {}, commandData = {}) {
@@ -1268,10 +1407,7 @@ function buildCommandReplayKey(raw = {}, commandData = {}) {
   const commandBodyHash = crypto.createHash("sha1").update(commandBody).digest("hex").slice(0, 16);
   const timestampMs = parseMessageTimestampToMs(raw?.messageTimestamp);
   const timestampSeconds = timestampMs ? Math.floor(timestampMs / 1000) : 0;
-  const messageId = String(raw?.key?.id || "").trim().toLowerCase();
-  const entropy = timestampSeconds || messageId;
-  if (!entropy) return "";
-
+  const entropy = timestampSeconds || "no_ts";
   return `cmd_replay|${chatId}|${sender}|${commandName}|${commandBodyHash}|${entropy}`;
 }
 
@@ -2799,12 +2935,12 @@ const GROUP_COMMAND_SUBBOT_MAX_DELAY_MS = Math.max(
   parseNumberEnv("GROUP_COMMAND_SUBBOT_MAX_DELAY_MS", 850) || 850
 );
 const GROUP_COMMAND_SEMANTIC_DEDUP_TTL_MS = Math.max(
-  8_000,
-  parseNumberEnv("GROUP_COMMAND_SEMANTIC_DEDUP_TTL_MS", 10 * 60 * 1000) || 10 * 60 * 1000
+  15_000,
+  parseNumberEnv("GROUP_COMMAND_SEMANTIC_DEDUP_TTL_MS", 90_000) || 90_000
 );
 const COMMAND_REPLAY_CACHE_TTL_MS = Math.max(
-  60_000,
-  parseNumberEnv("COMMAND_REPLAY_CACHE_TTL_MS", 20 * 60 * 1000) || 20 * 60 * 1000
+  30_000,
+  parseNumberEnv("COMMAND_REPLAY_CACHE_TTL_MS", 2 * 60 * 1000) || 2 * 60 * 1000
 );
 const GROUP_UPDATE_CLAIM_ENABLED = parseBooleanEnv("GROUP_UPDATE_CLAIM_ENABLED", true);
 const GROUP_UPDATE_CLAIM_TTL_MS = Math.max(
@@ -8485,6 +8621,13 @@ async function handleIncomingMessages(botState, sock, messages) {
       if (!commandData) continue;
       const cmd = comandos.get(commandData.commandName);
       if (!cmd) continue;
+      const leaderDecision = shouldCurrentBotHandleGroupCommand(
+        botState,
+        executionInfo?.groupMetadata || null
+      );
+      if (!leaderDecision.allowed) {
+        continue;
+      }
       if (shouldSkipCommandReplay(botState, raw, commandData)) {
         continue;
       }
