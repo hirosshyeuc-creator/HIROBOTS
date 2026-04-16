@@ -1,22 +1,85 @@
+function formatBytes(bytes = 0) {
+  const value = Number(bytes || 0);
+  if (!Number.isFinite(value) || value <= 0) return "0 B";
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(2)} GB`;
+  if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${value} B`;
+}
+
+function formatUptime(seconds = 0) {
+  const total = Math.max(0, Math.floor(Number(seconds || 0)));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+
+  if (hours > 0) return `${hours}h ${minutes}m ${secs}s`;
+  if (minutes > 0) return `${minutes}m ${secs}s`;
+  return `${secs}s`;
+}
+
+async function react(sock, msg, emoji) {
+  try {
+    if (!msg?.key) return;
+    await sock.sendMessage(msg.key.remoteJid, {
+      react: {
+        text: emoji,
+        key: msg.key,
+      },
+    });
+  } catch {}
+}
+
 export default {
   command: ["ping", "speed"],
-  category: "sistema",
+  categoria: "sistema",
   description: "Muestra la latencia del bot",
 
   run: async ({ sock, msg, from }) => {
-    const t0 = Date.now();
-    const sent = await sock.sendMessage(
-      from,
-      { text: "🏓 Pong...", ...global.channelInfo },
-      { quoted: msg }
-    );
-    const ms = Date.now() - t0;
+    try {
+      const start = process.hrtime.bigint();
+      await react(sock, msg, "🏓");
 
-    // Editar no siempre funciona en WA, así que enviamos otro mensaje corto
-    return sock.sendMessage(
-      from,
-      { text: `✅ *Ping:* ${ms}ms`, ...global.channelInfo },
-      { quoted: sent }
-    );
-  }
+      const sent = await sock.sendMessage(
+        from,
+        {
+          text: "🏓 *Midiendo velocidad del bot...*",
+          ...global.channelInfo,
+        },
+        { quoted: msg }
+      );
+
+      const end = process.hrtime.bigint();
+      const latencyMs = Number(end - start) / 1_000_000;
+      const mem = process.memoryUsage();
+
+      return await sock.sendMessage(
+        from,
+        {
+          text: [
+            "╭━━━〔 🏓 *PING FSOCIETY* 〕━━━⬣",
+            "┃",
+            `┃ ⚡ *Latencia:* ${latencyMs.toFixed(0)} ms`,
+            `┃ 🚀 *Uptime:* ${formatUptime(process.uptime())}`,
+            `┃ 📦 *RAM bot:* ${formatBytes(mem.rss)}`,
+            `┃ 🧠 *Heap usado:* ${formatBytes(mem.heapUsed)}`,
+            "╰━━━━━━━━━━━━━━━━━━━━⬣",
+          ].join("\n"),
+          ...global.channelInfo,
+        },
+        { quoted: sent }
+      );
+    } catch (error) {
+      console.error("PING ERROR:", error);
+      await react(sock, msg, "❌");
+      return await sock.sendMessage(
+        from,
+        {
+          text: "❌ Error al medir el ping.",
+          ...global.channelInfo,
+        },
+        { quoted: msg }
+      );
+    }
+  },
 };
