@@ -75,6 +75,37 @@ function normalizeMp4Name(name) {
   return `${base || "youtube-video"}.mp4`;
 }
 
+function formatDuration(value = "") {
+  const text = cleanText(value);
+  return text || "Desconocida";
+}
+
+async function getBuffer(url) {
+  const target = cleanText(url);
+  if (!target) return null;
+
+  try {
+    const response = await axios.get(target, {
+      responseType: "arraybuffer",
+      timeout: 20_000,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/145 Safari/537.36",
+      },
+      httpAgent: HTTP_AGENT,
+      httpsAgent: HTTPS_AGENT,
+      maxRedirects: 5,
+      validateStatus: () => true,
+    });
+
+    if (response.status >= 400 || !response.data) return null;
+    const buffer = Buffer.from(response.data);
+    return buffer.length ? buffer : null;
+  } catch {
+    return null;
+  }
+}
+
 async function deleteFileSafe(filePath) {
   const target = String(filePath || "").trim();
   if (!target) return true;
@@ -231,6 +262,7 @@ async function resolveInputToUrl(input) {
       duration: "",
       author: "",
       videoId: extractYouTubeVideoId(directUrl),
+      thumbnail: "",
       searched: false,
     };
   }
@@ -248,6 +280,8 @@ async function resolveInputToUrl(input) {
     title: cleanText(video.title || "YouTube Video"),
     duration: cleanText(video.timestamp || ""),
     author: cleanText(video.author?.name || video.author || ""),
+    thumbnail: cleanText(video.thumbnail || ""),
+    videoId: cleanText(video.videoId || ""),
     searched: true,
   };
 }
@@ -283,10 +317,10 @@ async function getYtmp4Data(videoUrl, quality, fast = true) {
 
   const data = response.data;
   const remoteUrl =
-    data.stream_url_full ||
-    data.download_url_full ||
     data.direct_url ||
     data.provider_direct_url ||
+    data.stream_url_full ||
+    data.download_url_full ||
     data.url;
 
   if (!remoteUrl) {
@@ -298,7 +332,7 @@ async function getYtmp4Data(videoUrl, quality, fast = true) {
     title: cleanText(data.title || "YouTube Video"),
     fileName: normalizeMp4Name(data.filename || data.title || "youtube-video.mp4"),
     quality: cleanText(data.quality || data.quality_requested || quality || "360p"),
-    thumbnail: data.thumbnail || "",
+    thumbnail: cleanText(data.thumbnail || ""),
     cached: Boolean(data.cached),
     availableQualities: Array.isArray(data.available_qualities) ? data.available_qualities : [],
     expiresIn: Number(data.expires_in_hint_seconds || 0),
@@ -365,56 +399,110 @@ async function downloadRemoteMp4(remoteUrl, preferredName) {
   };
 }
 
-async function sendRemoteMp4(sock, from, quoted, data) {
-  const caption = [
-    "╭─〔 *DVYER • YTMP4* 〕",
-    `┃ 🎬 Título: ${clipText(data.title || data.fileName, 80)}`,
-    `┃ ⌁ Calidad: ${data.quality || "360p"}`,
-    `┃ ⚡ Modo: remoto rápido`,
-    data.cached ? "┃ 🚀 Cache: sí" : "┃ 🚀 Cache: no",
-    "╰─⟡ MP4 listo.",
-  ].join("\n");
+async function sendVideoPreview(sock, from, quoted, data) {
+  const thumbBuffer = await getBuffer(data.thumbnail);
 
-  try {
-    await sock.sendMessage(
+  const caption = [
+    "╭━━━━━━━━━━━━━━━╮",
+    "┃   *🎬 DVYER YTMP4*",
+    "╰━━━━━━━━━━━━━━━╯",
+    `🎞️ *Título:* ${clipText(data.title || "YouTube Video", 85)}`,
+    `⏱️ *Duración:* ${formatDuration(data.duration)}`,
+    `📺 *Calidad:* ${data.quality || "360p"}`,
+    data.author ? `👤 *Canal:* ${clipText(data.author, 50)}` : null,
+    data.cached ? "🚀 *Estado:* En caché" : "📡 *Estado:* Procesando",
+    "",
+    "⌛ *Preparando tu video...*",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  if (thumbBuffer) {
+    return await sock.sendMessage(
       from,
       {
-        document: { url: data.remoteUrl },
-        mimetype: "video/mp4",
-        fileName: data.fileName,
+        image: thumbBuffer,
         caption,
         ...global.channelInfo,
       },
       quoted
     );
-    return "document";
+  }
+
+  return await sock.sendMessage(
+    from,
+    {
+      text: caption,
+      ...global.channelInfo,
+    },
+    quoted
+  );
+}
+
+async function sendRemoteMp4(sock, from, quoted, data) {
+  const thumbBuffer = await getBuffer(data.thumbnail);
+
+  const caption = [
+    "╭━━━━━━━━━━━━━━━╮",
+    "┃   *✅ DVYER YTMP4*",
+    "╰━━━━━━━━━━━━━━━╯",
+    `🎞️ *Título:* ${clipText(data.title || data.fileName, 80)}`,
+    `📺 *Calidad:* ${data.quality || "360p"}`,
+    data.cached ? "🚀 *Entrega:* Caché rápida" : "📡 *Entrega:* Directa",
+    "",
+    "🎉 *Aquí tienes tu video*",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  try {
+    await sock.sendMessage(
+      from,
+      {
+        video: { url: data.remoteUrl },
+        mimetype: "video/mp4",
+        fileName: data.fileName,
+        caption,
+        gifPlayback: false,
+        jpegThumbnail: thumbBuffer || undefined,
+        ...global.channelInfo,
+      },
+      quoted
+    );
+    return "video";
   } catch {}
 
   await sock.sendMessage(
     from,
     {
-      video: { url: data.remoteUrl },
+      document: { url: data.remoteUrl },
       mimetype: "video/mp4",
       fileName: data.fileName,
       caption,
-      gifPlayback: false,
       ...global.channelInfo,
     },
     quoted
   );
 
-  return "video";
+  return "document";
 }
 
 async function sendLocalMp4(sock, from, quoted, data) {
+  const thumbBuffer = await getBuffer(data.thumbnail);
+
   const caption = [
-    "╭─〔 *DVYER • YTMP4* 〕",
-    `┃ 🎬 Título: ${clipText(data.title || data.fileName, 80)}`,
-    `┃ ⌁ Calidad: ${data.quality || "360p"}`,
-    `┃ ◈ Peso: ${humanBytes(data.size)}`,
-    `┃ ⚡ Modo: fallback local`,
-    "╰─⟡ MP4 listo.",
-  ].join("\n");
+    "╭━━━━━━━━━━━━━━━╮",
+    "┃   *✅ DVYER YTMP4*",
+    "╰━━━━━━━━━━━━━━━╯",
+    `🎞️ *Título:* ${clipText(data.title || data.fileName, 80)}`,
+    `📺 *Calidad:* ${data.quality || "360p"}`,
+    data.size ? `💾 *Peso:* ${humanBytes(data.size)}` : null,
+    "🛟 *Entrega:* Respaldo local",
+    "",
+    "🎉 *Aquí tienes tu video*",
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   if (Number(data?.size || 0) <= VIDEO_AS_DOCUMENT_THRESHOLD) {
     try {
@@ -426,6 +514,7 @@ async function sendLocalMp4(sock, from, quoted, data) {
           fileName: data.fileName,
           caption,
           gifPlayback: false,
+          jpegThumbnail: thumbBuffer || undefined,
           ...global.channelInfo,
         },
         quoted
@@ -501,12 +590,13 @@ export default {
           from,
           {
             text: [
-              "╭─〔 *DVYER • YTMP4* 〕",
-              "┃ Uso: .ytmp4 <link o nombre>",
-              "┃ Uso: .ytmp4 720p <link o nombre>",
-              "┃ Uso: .ytmp4 fast <link o nombre>",
-              "┃ Uso: .ytmp4 nofast <link o nombre>",
-              "╰─⟡ MP4 rápido desde DVYER API.",
+              "╭━━━━━━━━━━━━━━━╮",
+              "┃   *🎬 DVYER YTMP4*",
+              "╰━━━━━━━━━━━━━━━╯",
+              "📌 *Uso:* .ytmp4 <link o nombre>",
+              "📌 *Uso:* .ytmp4 720p <link o nombre>",
+              "📌 *Uso:* .ytmp4 fast <link o nombre>",
+              "📌 *Uso:* .ytmp4 nofast <link o nombre>",
             ].join("\n"),
             ...global.channelInfo,
           },
@@ -519,22 +609,6 @@ export default {
         videoUrl: resolved.url,
       });
       if (!downloadCharge?.ok) return;
-
-      await sock.sendMessage(
-        from,
-        {
-          text: [
-            "╭─〔 *DVYER • YTMP4* 〕",
-            `┃ 🎬 Título: ${clipText(resolved.title, 80)}`,
-            resolved.duration ? `┃ ⏱ Duración: ${resolved.duration}` : "┃ ⏱ Duración: procesando",
-            `┃ ⌁ Calidad: ${quality}`,
-            `┃ 🚀 Fast: ${fast ? "sí" : "no"}`,
-            "╰─⟡ Obteniendo enlace rápido...",
-          ].join("\n"),
-          ...global.channelInfo,
-        },
-        quoted
-      );
 
       const apiData = await runWithProviderCircuit(
         PROVIDER_NAME,
@@ -555,11 +629,21 @@ export default {
         }
       );
 
+      await sendVideoPreview(sock, from, quoted, {
+        title: apiData.title || resolved.title,
+        duration: resolved.duration,
+        quality: apiData.quality || quality,
+        thumbnail: apiData.thumbnail || resolved.thumbnail,
+        author: resolved.author,
+        cached: apiData.cached,
+      });
+
       try {
         await sendRemoteMp4(sock, from, quoted, {
           ...apiData,
           title: apiData.title || resolved.title,
           quality: apiData.quality || quality,
+          thumbnail: apiData.thumbnail || resolved.thumbnail,
         });
         sentSuccessfully = true;
         return;
@@ -568,7 +652,7 @@ export default {
       await sock.sendMessage(
         from,
         {
-          text: "⌛ El envío remoto falló, usando respaldo local...",
+          text: "⌛ El envío rápido falló. Usando respaldo local...",
           ...global.channelInfo,
         },
         quoted
@@ -581,6 +665,7 @@ export default {
         ...downloaded,
         title: apiData.title || resolved.title,
         quality: apiData.quality || quality,
+        thumbnail: apiData.thumbnail || resolved.thumbnail,
       });
 
       sentSuccessfully = true;
